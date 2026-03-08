@@ -1,0 +1,26 @@
+{
+  "name": "gyana-ai",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "backend": "cd ../docu_rag_backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "start": "concurrently --names BACK,FRONT --prefix-colors yellow,cyan \"npm run backend\" \"npm run dev\""
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.4",
+    "vite": "^7.3.1"
+  }
+}
