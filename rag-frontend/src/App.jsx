@@ -5,8 +5,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
 
-const API    = "http://127.0.0.1:8000";
+// ── Firebase init ─────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const auth        = getAuth(firebaseApp);
+
+const API    = import.meta.env.VITE_API_URL || "https://gyana-ai.onrender.com";
 const ACCEPT = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 
 const FILE_ICONS = {
@@ -27,6 +41,69 @@ const fileIcon = (n)    => FILE_ICONS[fileExt(n)] ?? "📁";
 const fileSz   = (b)    => b < 1_048_576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1_048_576).toFixed(1)} MB`;
 const timeNow  = ()     => new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
 const uid      = ()     => crypto.randomUUID();
+
+// ── Login Page ────────────────────────────────────────────────────────────────
+function LoginPage() {
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+
+  const handleGoogle = async () => {
+    setLoading(true); setError(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      setError(e.message);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      display:"flex", flexDirection:"column", alignItems:"center",
+      justifyContent:"center", height:"100vh", background:"#0a0a0a",
+      color:"#fff", fontFamily:"system-ui, sans-serif",
+    }}>
+      <div style={{
+        display:"flex", flexDirection:"column", alignItems:"center",
+        gap:"1rem", padding:"2.5rem", borderRadius:"16px",
+        background:"#111", border:"1px solid #1f1f1f",
+        boxShadow:"0 0 60px rgba(0,200,180,0.08)",
+      }}>
+        <div style={{
+          width:56, height:56, borderRadius:"50%",
+          background:"linear-gradient(135deg,#0d9488,#0f766e)",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          fontSize:26,
+        }}>🧠</div>
+        <h1 style={{ margin:0, fontSize:"1.6rem", fontWeight:700, letterSpacing:"-0.5px" }}>Gyana AI</h1>
+        <p style={{ margin:0, color:"#666", fontSize:"0.9rem" }}>Document Intelligence · Sign in to continue</p>
+
+        <button onClick={handleGoogle} disabled={loading} style={{
+          marginTop:"0.5rem", display:"flex", alignItems:"center", gap:"10px",
+          background:"#fff", color:"#111", border:"none",
+          padding:"11px 24px", borderRadius:"8px",
+          fontSize:"0.95rem", fontWeight:600, cursor:loading?"not-allowed":"pointer",
+          opacity: loading ? 0.7 : 1, transition:"opacity 0.2s",
+        }}>
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+            <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
+            <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+            <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+          </svg>
+          {loading ? "Signing in…" : "Continue with Google"}
+        </button>
+
+        {error && <p style={{ color:"#f87171", fontSize:"0.8rem", margin:0, maxWidth:260, textAlign:"center" }}>{error}</p>}
+
+        <p style={{ color:"#333", fontSize:"0.75rem", margin:0, marginTop:"0.5rem" }}>
+          Your documents stay private to your account
+        </p>
+      </div>
+    </div>
+  );
+}
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 function MD({ text = "" }) {
@@ -63,6 +140,7 @@ function MD({ text = "" }) {
 
 // =============================================================================
 export default function App() {
+  const [user,    setUser]    = useState(undefined); // undefined = loading
   const [docs,    setDocs]    = useState([]);
   const [msgs,    setMsgs]    = useState([]);
   const [input,   setInput]   = useState("");
@@ -79,6 +157,12 @@ export default function App() {
   const recRef    = useRef(null);
   const micTmr    = useRef(null);
   const abortRef  = useRef(null);
+
+  // ── Auth listener ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, u => setUser(u ?? null));
+    return unsub;
+  }, []);
 
   const readyDocs = docs.filter(d => d.status === "ready");
 
@@ -193,10 +277,21 @@ export default function App() {
     } catch (e) { notify(e.name==="NotAllowedError"?"Microphone access denied":e.message,"err"); }
   }, [notify]);
 
-  const stopMic = useCallback(()=>{ recRef.current?.state!=="inactive" && recRef.current?.stop(); },[]);
-  const fmtMic  = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-  const copyMsg = (id, text) => { navigator.clipboard.writeText(text).catch(()=>{}); setCopied(id); setTimeout(()=>setCopied(null),1800); };
+  const stopMic  = useCallback(()=>{ recRef.current?.state!=="inactive" && recRef.current?.stop(); },[]);
+  const fmtMic   = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  const copyMsg  = (id, text) => { navigator.clipboard.writeText(text).catch(()=>{}); setCopied(id); setTimeout(()=>setCopied(null),1800); };
+  const handleSignOut = async () => { await signOut(auth); setDocs([]); setMsgs([]); };
 
+  // ── Auth guards ─────────────────────────────────────────────────────────────
+  if (user === undefined) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
+      height:"100vh", background:"#0a0a0a", color:"#555", fontSize:"0.9rem" }}>
+      Loading…
+    </div>
+  );
+  if (user === null) return <LoginPage />;
+
+  // ── Main App ────────────────────────────────────────────────────────────────
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -208,6 +303,22 @@ export default function App() {
             <div className="sb-name">Gyana AI</div>
             <div className="sb-tagline">Document Intelligence</div>
           </div>
+        </div>
+
+        {/* User info + sign out */}
+        <div style={{
+          display:"flex", alignItems:"center", gap:"8px",
+          padding:"8px 12px", borderRadius:"8px", background:"#111",
+          border:"1px solid #1a1a1a", margin:"0 0 10px 0",
+        }}>
+          {user.photoURL && <img src={user.photoURL} alt="" width={24} height={24} style={{borderRadius:"50%"}}/>}
+          <span style={{ fontSize:"0.75rem", color:"#aaa", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {user.displayName || user.email}
+          </span>
+          <button onClick={handleSignOut} style={{
+            background:"none", border:"none", color:"#555", cursor:"pointer",
+            fontSize:"0.7rem", padding:"2px 6px", borderRadius:"4px",
+          }} title="Sign out">↩</button>
         </div>
 
         <button className="new-btn" onClick={()=>{setMsgs([]); setInput("");}}>
@@ -248,7 +359,7 @@ export default function App() {
         <div className="sb-foot">
           <div className="model-pill">
             <div className="model-led"/>
-            <div><div className="model-name">llama3-70b-8192</div><div className="model-sub">Groq · FAISS · MiniLM-L6</div></div>
+            <div><div className="model-name">llama3-70b-8192</div><div className="model-sub">Groq · Supabase · MiniLM-L6</div></div>
           </div>
           <p className="doc-count">{readyDocs.length===0?"No documents indexed":`${readyDocs.length} document${readyDocs.length>1?"s":""} in context`}</p>
         </div>
