@@ -78,12 +78,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        # Add your production domain here, e.g. "https://gyana.ai"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins — covers Vercel, localhost, any domain
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -171,7 +167,7 @@ def stats():
 async def upload_file(file: UploadFile = File(...)):
     """
     Accept PDF / DOCX / PPTX / TXT / PNG / JPG / MP3 / WAV / M4A.
-    Extracts text → detects language → chunks → embeds → stores in FAISS.
+    Extracts text → detects language → chunks → embeds → stores in vector DB.
     """
     if not file.filename:
         raise HTTPException(400, detail="No filename provided.")
@@ -205,7 +201,7 @@ async def upload_file(file: UploadFile = File(...)):
         language = detect_language(text)
         log.info("Detected language: %s  for %s", language, file.filename)
 
-        # 3. Chunk + embed + store  (chunking now lives in vector_store)
+        # 3. Chunk + embed + store
         n_chunks = add_documents(text, source=file.filename)
         log.info("Indexed %d chunks from %s", n_chunks, file.filename)
 
@@ -271,9 +267,9 @@ async def ask_stream(body: AskRequest):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":   "no-cache",
+            "Cache-Control":     "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection":      "keep-alive",
+            "Connection":        "keep-alive",
         },
     )
 
@@ -327,7 +323,7 @@ async def speech_query(file: UploadFile = File(...)):
 # ── Clear store ───────────────────────────────────────────────────────────────
 @app.delete("/documents", tags=["Documents"])
 def delete_documents():
-    """Wipe the entire FAISS vector store."""
+    """Wipe the entire vector store."""
     clear_store()
     log.info("Vector store cleared.")
     return {"message": "All documents have been removed from the knowledge base."}
