@@ -29,7 +29,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 HF_API_KEY    = os.getenv("HF_API_KEY")
 
-HF_MODEL_URL  = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+HF_MODEL_URL  = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
 # ---------------------------------------------------------------------------
 # Data model
