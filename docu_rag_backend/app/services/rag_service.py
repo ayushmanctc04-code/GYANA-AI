@@ -1,11 +1,10 @@
 # =============================================================================
 #  Gyana AI  –  RAG Service
-#  • Retrieves top-K chunks from FAISS
+#  • Retrieves top-K chunks from Supabase per user
 #  • Builds grounded prompt with source labels
 #  • Calls Groq LLM (llama3-70b-8192)
 #  • Supports standard + async streaming responses
 #  • Rolling conversation memory (last N turns)
-#  • Returns source citations alongside the answer
 # =============================================================================
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import deque
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from app.services.vector_store import search_documents
 
@@ -27,12 +26,12 @@ GROQ_MODEL    = os.getenv("GROQ_MODEL",    "llama-3.3-70b-versatile")
 LLM_TEMP      = float(os.getenv("LLM_TEMP",    "0.1"))
 MAX_TOKENS    = int(os.getenv("MAX_TOKENS",     "1024"))
 TOP_K_CHUNKS  = int(os.getenv("TOP_K_CHUNKS",   "5"))
-MEMORY_TURNS  = int(os.getenv("MEMORY_TURNS",   "6"))   # pairs kept in context
+MEMORY_TURNS  = int(os.getenv("MEMORY_TURNS",   "6"))
 
 # ---------------------------------------------------------------------------
-# Conversation memory  (module-level, shared across requests in single process)
+# Conversation memory (per-process, shared)
 # ---------------------------------------------------------------------------
-_memory: deque = deque(maxlen=MEMORY_TURNS * 2)   # user + assistant alternating
+_memory: deque = deque(maxlen=MEMORY_TURNS * 2)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -52,7 +51,7 @@ STRICT RULES — never violate these:
 """
 
 # ---------------------------------------------------------------------------
-# Groq client (lazy singleton)
+# Groq client
 # ---------------------------------------------------------------------------
 _groq_client = None
 
@@ -60,10 +59,7 @@ def _get_client():
     global _groq_client
     if _groq_client is None:
         if not GROQ_API_KEY:
-            raise RuntimeError(
-                "GROQ_API_KEY is not set. "
-                "Add it to your .env file: GROQ_API_KEY=your_key_here"
-            )
+            raise RuntimeError("GROQ_API_KEY is not set. Add it to your .env file: GROQ_API_KEY=your_key_here")
         try:
             from groq import Groq
         except ImportError:
@@ -76,7 +72,6 @@ def _get_client():
 # Helpers
 # ---------------------------------------------------------------------------
 def _build_context(results: list[dict]) -> tuple[str, list[str]]:
-    """Build a labelled context block and collect unique source names."""
     parts   = []
     sources = []
     seen    = set()
@@ -90,7 +85,6 @@ def _build_context(results: list[dict]) -> tuple[str, list[str]]:
 
 
 def _build_messages(context: str, question: str) -> list[dict]:
-    """Assemble messages: system + memory window + current user turn."""
     user_content = (
         f"<context>\n{context}\n</context>\n\n"
         f"<question>{question}</question>"
@@ -107,14 +101,10 @@ def _update_memory(question: str, answer: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Standard (non-streaming) answer
+# Standard answer
 # ---------------------------------------------------------------------------
-async def ask_question(question: str) -> dict:
-    """
-    Full RAG pipeline.
-    Returns: {"answer": str, "sources": list[str], "chunks_used": int}
-    """
-    results = search_documents(question, top_k=TOP_K_CHUNKS)
+async def ask_question(question: str, user_id: str = "default") -> dict:
+    results = search_documents(question, top_k=TOP_K_CHUNKS, user_id=user_id)
 
     if not results:
         return {
@@ -137,10 +127,7 @@ async def ask_question(question: str) -> dict:
     answer = response.choices[0].message.content.strip()
     _update_memory(question, answer)
 
-    log.info(
-        "Answered '%s…' using %d chunks from: %s",
-        question[:60], len(results), sources,
-    )
+    log.info("Answered '%s…' using %d chunks from: %s", question[:60], len(results), sources)
 
     return {
         "answer":      answer,
@@ -152,12 +139,8 @@ async def ask_question(question: str) -> dict:
 # ---------------------------------------------------------------------------
 # Streaming answer
 # ---------------------------------------------------------------------------
-async def stream_answer(question: str) -> AsyncIterator[str]:
-    """
-    Streaming version – yields text tokens as they arrive from Groq.
-    Used by the /ask/stream SSE endpoint.
-    """
-    results = search_documents(question, top_k=TOP_K_CHUNKS)
+async def stream_answer(question: str, user_id: str = "default") -> AsyncIterator[str]:
+    results = search_documents(question, top_k=TOP_K_CHUNKS, user_id=user_id)
 
     if not results:
         yield "I could not find an answer to that in the uploaded documents."

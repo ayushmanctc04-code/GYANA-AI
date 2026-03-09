@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Header, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -46,18 +45,16 @@ SUPPORTED_IMAGES = {".png", ".jpg", ".jpeg"}
 SUPPORTED_AUDIO  = {".mp3", ".wav", ".m4a", ".webm"}
 ALL_SUPPORTED    = SUPPORTED_DOCS | SUPPORTED_IMAGES | SUPPORTED_AUDIO
 
-# Max upload size: 50 MB
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
-# Lifespan – startup / shutdown
+# Lifespan
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOAD_DIR.mkdir(exist_ok=True)
     log.info("Gyana AI backend started ✓")
     yield
-    # Clean up leftover temp files on shutdown
     for f in UPLOAD_DIR.glob("*"):
         try:
             f.unlink()
@@ -78,7 +75,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins — covers Vercel, localhost, any domain
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,6 +95,7 @@ class UploadResponse(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+    user_id:  str = Field(default="default")
 
 
 class AskResponse(BaseModel):
@@ -130,19 +128,15 @@ def _file_type_label(suffix: str) -> str:
 
 
 async def _save_upload(file: UploadFile) -> Path:
-    """Stream-save upload to a unique temp path; enforce size limit."""
     suffix = Path(file.filename or "upload").suffix.lower()
     dest   = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
     size   = 0
     with dest.open("wb") as out:
-        while chunk := await file.read(1024 * 256):   # 256 KB chunks
+        while chunk := await file.read(1024 * 256):
             size += len(chunk)
             if size > MAX_UPLOAD_BYTES:
                 dest.unlink(missing_ok=True)
-                raise HTTPException(
-                    413,
-                    detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_BYTES // 1024 // 1024} MB.",
-                )
+                raise HTTPException(413, detail=f"File exceeds 50 MB limit.")
             out.write(chunk)
     return dest
 
@@ -156,37 +150,28 @@ def health():
 
 
 @app.get("/stats", response_model=StatsResponse, tags=["Info"])
-def stats():
-    """Return current vector store statistics."""
-    s = get_stats()
+def stats(x_user_id: str = Header(default="default")):
+    s = get_stats(user_id=x_user_id)
     return StatsResponse(**s)
 
 
 # ── Upload ────────────────────────────────────────────────────────────────────
 @app.post("/upload", response_model=UploadResponse, tags=["Documents"])
-async def upload_file(file: UploadFile = File(...)):
-    """
-    Accept PDF / DOCX / PPTX / TXT / PNG / JPG / MP3 / WAV / M4A.
-    Extracts text → detects language → chunks → embeds → stores in vector DB.
-    """
+async def upload_file(
+    file: UploadFile = File(...),
+    x_user_id: str = Header(default="default"),
+):
     if not file.filename:
         raise HTTPException(400, detail="No filename provided.")
 
     suffix = Path(file.filename).suffix.lower()
     if suffix not in ALL_SUPPORTED:
-        raise HTTPException(
-            415,
-            detail=(
-                f"Unsupported file type '{suffix}'. "
-                f"Supported: {', '.join(sorted(ALL_SUPPORTED))}"
-            ),
-        )
+        raise HTTPException(415, detail=f"Unsupported file type '{suffix}'.")
 
     file_path = await _save_upload(file)
-    log.info("Saved upload: %s  (%s)", file.filename, suffix)
+    log.info("Saved upload: %s (%s) for user=%s", file.filename, suffix, x_user_id)
 
     try:
-        # 1. Extract text
         if suffix in SUPPORTED_DOCS:
             text = extract_text(file_path)
         elif suffix in SUPPORTED_IMAGES:
@@ -197,12 +182,10 @@ async def upload_file(file: UploadFile = File(...)):
         if not text or not text.strip():
             raise HTTPException(422, detail="No text could be extracted from this file.")
 
-        # 2. Detect language
         language = detect_language(text)
-        log.info("Detected language: %s  for %s", language, file.filename)
+        log.info("Detected language: %s for %s", language, file.filename)
 
-        # 3. Chunk + embed + store
-        n_chunks = add_documents(text, source=file.filename)
+        n_chunks = add_documents(text, source=file.filename, user_id=x_user_id)
         log.info("Indexed %d chunks from %s", n_chunks, file.filename)
 
         return UploadResponse(
@@ -225,14 +208,11 @@ async def upload_file(file: UploadFile = File(...)):
 # ── Ask (standard) ────────────────────────────────────────────────────────────
 @app.post("/ask", response_model=AskResponse, tags=["Query"])
 async def ask(body: AskRequest):
-    """RAG query – retrieve relevant chunks, answer via Groq LLM."""
-    if get_stats()["total_chunks"] == 0:
-        raise HTTPException(
-            400, detail="No documents indexed yet. Please upload a document first."
-        )
+    if get_stats(user_id=body.user_id)["total_chunks"] == 0:
+        raise HTTPException(400, detail="No documents indexed yet. Please upload a document first.")
 
     try:
-        result = await ask_question(body.question)
+        result = await ask_question(body.question, user_id=body.user_id)
         return AskResponse(**result)
     except Exception as exc:
         log.exception("Ask failed: %s", exc)
@@ -242,19 +222,12 @@ async def ask(body: AskRequest):
 # ── Ask (streaming SSE) ───────────────────────────────────────────────────────
 @app.post("/ask/stream", tags=["Query"])
 async def ask_stream(body: AskRequest):
-    """
-    SSE streaming version of /ask.
-    Frontend reads tokens via fetch + ReadableStream.
-    Each event: `data: <token>\n\n`
-    Terminal event: `data: [DONE]\n\n`
-    """
-    if get_stats()["total_chunks"] == 0:
+    if get_stats(user_id=body.user_id)["total_chunks"] == 0:
         raise HTTPException(400, detail="No documents indexed yet.")
 
     async def event_generator():
         try:
-            async for token in stream_answer(body.question):
-                # Escape newlines so SSE framing stays intact
+            async for token in stream_answer(body.question, user_id=body.user_id):
                 safe = token.replace("\n", "\\n")
                 yield f"data: {safe}\n\n"
         except Exception as exc:
@@ -276,17 +249,16 @@ async def ask_stream(body: AskRequest):
 
 # ── Speech query ──────────────────────────────────────────────────────────────
 @app.post("/speech-query", response_model=SpeechQueryResponse, tags=["Query"])
-async def speech_query(file: UploadFile = File(...)):
-    """Accept audio → transcribe → RAG query → return answer."""
+async def speech_query(
+    file: UploadFile = File(...),
+    x_user_id: str = Header(default="default"),
+):
     if not file.filename:
         raise HTTPException(400, detail="No filename provided.")
 
     suffix = Path(file.filename).suffix.lower()
     if suffix not in SUPPORTED_AUDIO:
-        raise HTTPException(
-            415,
-            detail=f"Unsupported audio format '{suffix}'. Supported: {', '.join(sorted(SUPPORTED_AUDIO))}",
-        )
+        raise HTTPException(415, detail=f"Unsupported audio format '{suffix}'.")
 
     file_path = await _save_upload(file)
 
@@ -297,14 +269,14 @@ async def speech_query(file: UploadFile = File(...)):
 
         log.info("Transcribed: %s", question[:80])
 
-        if get_stats()["total_chunks"] == 0:
+        if get_stats(user_id=x_user_id)["total_chunks"] == 0:
             return SpeechQueryResponse(
                 transcribed_question=question,
                 answer="No documents indexed yet.",
                 sources=[],
             )
 
-        result = await ask_question(question)
+        result = await ask_question(question, user_id=x_user_id)
         return SpeechQueryResponse(
             transcribed_question=question,
             answer=result["answer"],
@@ -322,8 +294,7 @@ async def speech_query(file: UploadFile = File(...)):
 
 # ── Clear store ───────────────────────────────────────────────────────────────
 @app.delete("/documents", tags=["Documents"])
-def delete_documents():
-    """Wipe the entire vector store."""
-    clear_store()
-    log.info("Vector store cleared.")
+def delete_documents(x_user_id: str = Header(default="default")):
+    clear_store(user_id=x_user_id)
+    log.info("Vector store cleared for user=%s", x_user_id)
     return {"message": "All documents have been removed from the knowledge base."}
