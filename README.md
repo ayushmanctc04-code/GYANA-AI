@@ -1,12 +1,8 @@
 ---
 title: Gyana AI
 emoji: 🧠
-colorFrom: teal
-colorTo: green
+colorFrom: green
+colorTo: blue
 sdk: docker
 pinned: false
 ---
-
-# Gyana AI — Document Intelligence Platform
-
-Upload your documents and ask questions using AI.
