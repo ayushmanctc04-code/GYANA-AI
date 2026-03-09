@@ -1,7 +1,7 @@
 # =============================================================================
-#  Gyana AI  –  Vector Store (Supabase pgvector)
+#  Gyana AI  –  Vector Store (Supabase pgvector + HuggingFace API embeddings)
 #  • Semantic-aware paragraph chunking with configurable overlap
-#  • SentenceTransformers all-MiniLM-L6-v2 (L2-normalised → cosine sim)
+#  • HuggingFace Inference API for embeddings (no local model needed)
 #  • Supabase pgvector for persistent storage across restarts
 # =============================================================================
 
@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
+import requests
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -20,13 +21,15 @@ log = logging.getLogger("gyana.vector_store")
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-EMBED_MODEL   = os.getenv("EMBED_MODEL",    "all-MiniLM-L6-v2")
 CHUNK_SIZE    = int(os.getenv("CHUNK_SIZE",    "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP",  "80"))
 TOP_K         = int(os.getenv("TOP_K",           "5"))
 
 SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
+HF_API_KEY    = os.getenv("HF_API_KEY")
+
+HF_MODEL_URL  = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -41,8 +44,7 @@ class Chunk:
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
-_embed_model  = None
-_supabase     = None
+_supabase = None
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +58,8 @@ def _get_supabase():
         except ImportError:
             raise RuntimeError("pip install supabase")
         if not SUPABASE_URL or not SUPABASE_KEY:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in environment.")
-        log.info("Connecting to Supabase at %s", SUPABASE_URL[:30])
+            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set.")
+        log.info("Connecting to Supabase...")
         _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         log.info("Supabase client initialized ✓")
     return _supabase
@@ -67,10 +69,6 @@ def _get_supabase():
 # Public API
 # ---------------------------------------------------------------------------
 def add_documents(text: str, source: str = "document") -> int:
-    """
-    Chunk text → embed → store in Supabase pgvector.
-    Returns number of chunks stored.
-    """
     log.info("Starting add_documents for '%s'", source)
 
     log.info("Chunking text...")
@@ -79,11 +77,10 @@ def add_documents(text: str, source: str = "document") -> int:
     if not new_chunks:
         return 0
 
-    log.info("Embedding %d chunks...", len(new_chunks))
+    log.info("Embedding %d chunks via HuggingFace API...", len(new_chunks))
     vectors = _embed([c.text for c in new_chunks])
     log.info("Embedding done ✓ shape=%s", vectors.shape)
 
-    log.info("Connecting to Supabase...")
     client = _get_supabase()
 
     rows = [
@@ -97,7 +94,6 @@ def add_documents(text: str, source: str = "document") -> int:
     ]
 
     log.info("Inserting %d rows into Supabase...", len(rows))
-    # Insert in batches of 10 to avoid timeouts
     batch_size = 10
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
@@ -113,9 +109,6 @@ def add_documents(text: str, source: str = "document") -> int:
 
 
 def search_documents(query: str, top_k: int = TOP_K) -> list[dict]:
-    """
-    Embed query → cosine similarity search via Supabase RPC.
-    """
     client = _get_supabase()
     q_vec  = _embed([query])[0].tolist()
 
@@ -139,7 +132,7 @@ def search_documents(query: str, top_k: int = TOP_K) -> list[dict]:
         return results
 
     except Exception as exc:
-        log.warning("Vector search failed, falling back to text search: %s", exc)
+        log.warning("Vector search failed, falling back: %s", exc)
         response = client.table("documents").select("chunk_text, filename").limit(top_k).execute()
         return [
             {"text": r.get("chunk_text", ""), "source": r.get("filename", "unknown"), "score": 0.5}
@@ -224,29 +217,55 @@ def _tail_overlap(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Embedding
+# Embedding via HuggingFace Inference API
 # ---------------------------------------------------------------------------
-def _get_model():
-    global _embed_model
-    if _embed_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            raise RuntimeError("pip install sentence-transformers")
-        log.info("Loading embedding model '%s'…", EMBED_MODEL)
-        _embed_model = SentenceTransformer(EMBED_MODEL)
-        log.info("Embedding model loaded ✓")
-    return _embed_model
-
-
 def _embed(texts: list[str]) -> np.ndarray:
-    log.info("Encoding %d texts...", len(texts))
-    vecs = _get_model().encode(
-        texts,
-        convert_to_numpy     = True,
-        normalize_embeddings = True,
-        show_progress_bar    = False,
-        batch_size           = 32,
-    )
-    log.info("Encoding done ✓")
-    return vecs.astype(np.float32)
+    if not HF_API_KEY:
+        raise RuntimeError("HF_API_KEY environment variable not set.")
+
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    all_vectors = []
+
+    # Process in batches of 8 to avoid API limits
+    batch_size = 8
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        log.info("Embedding batch %d/%d...", i // batch_size + 1, (len(texts) + batch_size - 1) // batch_size)
+
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    HF_MODEL_URL,
+                    headers=headers,
+                    json={"inputs": batch, "options": {"wait_for_model": True}},
+                    timeout=60,
+                )
+
+                if response.status_code == 503:
+                    # Model is loading, wait and retry
+                    log.info("HF model loading, waiting 20s...")
+                    time.sleep(20)
+                    continue
+
+                response.raise_for_status()
+                batch_vecs = np.array(response.json(), dtype=np.float32)
+
+                # Handle nested arrays from HF API
+                if batch_vecs.ndim == 3:
+                    batch_vecs = batch_vecs.mean(axis=1)
+
+                # L2 normalize
+                norms = np.linalg.norm(batch_vecs, axis=1, keepdims=True)
+                norms = np.where(norms == 0, 1, norms)
+                batch_vecs = batch_vecs / norms
+
+                all_vectors.append(batch_vecs)
+                break
+
+            except Exception as exc:
+                log.warning("HF API attempt %d failed: %s", attempt + 1, exc)
+                if attempt == 2:
+                    raise RuntimeError(f"HuggingFace API failed after 3 attempts: {exc}")
+                time.sleep(5)
+
+    return np.vstack(all_vectors)
