@@ -169,54 +169,27 @@ def clear_store(user_id: str = "default") -> None:
 
 
 # ---------------------------------------------------------------------------
-# Chunking
+# Chunking — simple word-based, no infinite loops
 # ---------------------------------------------------------------------------
 def _chunk_text(text: str, source: str) -> list[Chunk]:
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    words = text.split()
     chunks: list[Chunk] = []
-    idx     = 0
-    current = ""
+    idx = 0
 
-    for para in paragraphs:
-        candidate = (current + "\n\n" + para).strip() if current else para
+    words_per_chunk = max(50, CHUNK_SIZE // 5)
+    overlap_words   = max(10, CHUNK_OVERLAP // 5)
 
-        if len(candidate) <= CHUNK_SIZE:
-            current = candidate
-            continue
-
-        if current:
-            chunks.append(Chunk(text=current, source=source, index=idx))
+    i = 0
+    while i < len(words):
+        chunk_words = words[i:i + words_per_chunk]
+        chunk_text  = " ".join(chunk_words).strip()
+        if chunk_text:
+            chunks.append(Chunk(text=chunk_text, source=source, index=idx))
             idx += 1
-            current = _tail_overlap(current) + " " + para
-        else:
-            current = para
+        i += max(1, words_per_chunk - overlap_words)
 
-        while len(current) > CHUNK_SIZE:
-            sentences = re.split(r"(?<=[.!?])\s+", current)
-            batch = ""
-            rest  = []
-            for sent in sentences:
-                if len(batch) + len(sent) + 1 <= CHUNK_SIZE:
-                    batch = (batch + " " + sent).strip()
-                else:
-                    rest.append(sent)
-            if batch:
-                chunks.append(Chunk(text=batch, source=source, index=idx))
-                idx += 1
-            current = " ".join(rest)
-
-    if current.strip():
-        chunks.append(Chunk(text=current.strip(), source=source, index=idx))
-
+    log.info("Chunked into %d chunks", len(chunks))
     return chunks
-
-
-def _tail_overlap(text: str) -> str:
-    if len(text) <= CHUNK_OVERLAP:
-        return text
-    tail = text[-CHUNK_OVERLAP:]
-    sp   = tail.find(" ")
-    return tail[sp + 1:] if sp != -1 else tail
 
 
 # ---------------------------------------------------------------------------
