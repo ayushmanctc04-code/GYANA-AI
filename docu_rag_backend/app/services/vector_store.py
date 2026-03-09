@@ -117,7 +117,7 @@ def search_documents(query: str, top_k: int = TOP_K) -> list[dict]:
             "match_documents",
             {
                 "query_embedding": q_vec,
-                "match_threshold": 0.3,
+                "match_threshold": 0.0,
                 "match_count":     top_k,
             },
         ).execute()
