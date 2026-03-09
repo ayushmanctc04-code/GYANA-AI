@@ -1,7 +1,7 @@
 # =============================================================================
 #  Gyana AI  –  Document Service
 #  Extracts clean text from PDF, DOCX, PPTX, TXT
-#  PDF:  pdfplumber (primary, preserves layout) → PyMuPDF (fallback)
+#  PDF:  PyMuPDF page-by-page (memory efficient for large files)
 #  DOCX: python-docx – paragraphs + headings + tables
 #  PPTX: python-pptx – all shapes + tables + speaker notes
 #  TXT:  UTF-8 with latin-1 fallback
@@ -15,16 +15,14 @@ from pathlib import Path
 
 log = logging.getLogger("gyana.document")
 
+# Max pages to process (prevents hanging on huge PDFs)
+MAX_PAGES = 100
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 def extract_text(file_path: str | Path) -> str:
-    """
-    Dispatch to the correct extractor based on file extension.
-    Returns cleaned, normalised text string.
-    Raises ValueError for unsupported extensions.
-    """
     path = Path(file_path)
     ext  = path.suffix.lower()
 
@@ -44,84 +42,40 @@ def extract_text(file_path: str | Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PDF
+# PDF — page by page with PyMuPDF
 # ---------------------------------------------------------------------------
 def _extract_pdf(path: Path) -> str:
-    """pdfplumber (tables + layout) → PyMuPDF fallback."""
-
-    # ── pdfplumber ────────────────────────────────────────────────────────────
-    try:
-        import pdfplumber
-
-        parts: list[str] = []
-        with pdfplumber.open(str(path)) as pdf:
-            for i, page in enumerate(pdf.pages, 1):
-                header = f"[Page {i}]"
-
-                body = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-
-                # Extract tables as readable text
-                table_rows: list[str] = []
-                for table in page.extract_tables():
-                    for row in table:
-                        cells = [str(c or "").strip() for c in row]
-                        if any(cells):
-                            table_rows.append(" | ".join(cells))
-
-                section = "\n".join(filter(None, [header, body, *table_rows]))
-                if section.strip():
-                    parts.append(section)
-
-        result = "\n\n".join(parts)
-        if result.strip():
-            log.debug("PDF extracted via pdfplumber: %s chars", len(result))
-            return result
-
-    except ImportError:
-        log.debug("pdfplumber not available, trying PyMuPDF")
-    except Exception as exc:
-        log.warning("pdfplumber failed for %s: %s – trying PyMuPDF", path.name, exc)
-
-    # ── PyMuPDF fallback ──────────────────────────────────────────────────────
     try:
         import fitz  # PyMuPDF
 
         parts = []
         with fitz.open(str(path)) as doc:
-            for i, page in enumerate(doc, 1):
-                text = page.get_text("text")
-                if text.strip():
-                    parts.append(f"[Page {i}]\n{text}")
+            total_pages = len(doc)
+            pages_to_process = min(total_pages, MAX_PAGES)
+
+            if total_pages > MAX_PAGES:
+                log.warning("PDF has %d pages, processing first %d only", total_pages, MAX_PAGES)
+
+            for i in range(pages_to_process):
+                try:
+                    page = doc[i]
+                    text = page.get_text("text")
+                    if text.strip():
+                        parts.append(f"[Page {i+1}]\n{text}")
+                    # Free page memory immediately
+                    page = None
+                except Exception as exc:
+                    log.warning("Skipping page %d: %s", i+1, exc)
+                    continue
 
         result = "\n\n".join(parts)
-        log.debug("PDF extracted via PyMuPDF: %s chars", len(result))
+        log.info("PDF extracted: %d chars from %d pages", len(result), pages_to_process)
         return result
 
     except ImportError:
-        pass
-
-    # ── PyPDF2 last resort ────────────────────────────────────────────────────
-    try:
-        from PyPDF2 import PdfReader
-
-        reader = PdfReader(str(path))
-        parts  = []
-        for i, page in enumerate(reader.pages, 1):
-            text = page.extract_text() or ""
-            if text.strip():
-                parts.append(f"[Page {i}]\n{text}")
-
-        result = "\n\n".join(parts)
-        log.debug("PDF extracted via PyPDF2: %s chars", len(result))
-        return result
-
-    except ImportError:
-        pass
-
-    raise RuntimeError(
-        "PDF extraction requires pdfplumber, PyMuPDF (pymupdf), or PyPDF2.\n"
-        "Install: pip install pdfplumber"
-    )
+        raise RuntimeError("pip install pymupdf")
+    except Exception as exc:
+        raise RuntimeError(f"PDF extraction failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +94,6 @@ def _extract_docx(path: Path) -> str:
         text = para.text.strip()
         if not text:
             continue
-        # Prefix headings so chunker can use them as context anchors
         style = para.style.name if para.style else ""
         if style.startswith("Heading"):
             lvl = "".join(filter(str.isdigit, style)) or "1"
@@ -148,7 +101,6 @@ def _extract_docx(path: Path) -> str:
         else:
             parts.append(text)
 
-    # Tables
     for table in doc.tables:
         for row in table.rows:
             row_text = " | ".join(
@@ -189,13 +141,12 @@ def _extract_pptx(path: Path) -> str:
                     if row_text:
                         slide_parts.append(row_text)
 
-        # Speaker notes
         if slide.has_notes_slide:
             notes = slide.notes_slide.notes_text_frame.text.strip()
             if notes:
                 slide_parts.append(f"[Notes] {notes}")
 
-        if len(slide_parts) > 1:          # more than just the header
+        if len(slide_parts) > 1:
             parts.append("\n".join(slide_parts))
 
     return "\n\n".join(parts)
@@ -219,8 +170,8 @@ def _extract_txt(path: Path) -> str:
 def _clean(text: str) -> str:
     if not text:
         return ""
-    text = text.replace("\x00", "")                  # null bytes
+    text = text.replace("\x00", "")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)           # max 2 blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
     lines = [ln.rstrip() for ln in text.split("\n")]
     return "\n".join(lines).strip()
