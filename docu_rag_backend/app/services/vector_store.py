@@ -57,8 +57,9 @@ def _get_supabase():
             raise RuntimeError("pip install supabase")
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in environment.")
+        log.info("Connecting to Supabase at %s", SUPABASE_URL[:30])
         _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        log.info("Supabase client initialized.")
+        log.info("Supabase client initialized ✓")
     return _supabase
 
 
@@ -70,14 +71,21 @@ def add_documents(text: str, source: str = "document") -> int:
     Chunk text → embed → store in Supabase pgvector.
     Returns number of chunks stored.
     """
+    log.info("Starting add_documents for '%s'", source)
+
+    log.info("Chunking text...")
     new_chunks = _chunk_text(text, source)
+    log.info("Created %d chunks", len(new_chunks))
     if not new_chunks:
         return 0
 
+    log.info("Embedding %d chunks...", len(new_chunks))
     vectors = _embed([c.text for c in new_chunks])
-    client  = _get_supabase()
+    log.info("Embedding done ✓ shape=%s", vectors.shape)
 
-    # Get current user_id placeholder (source-based)
+    log.info("Connecting to Supabase...")
+    client = _get_supabase()
+
     rows = [
         {
             "user_id":    source,
@@ -88,15 +96,25 @@ def add_documents(text: str, source: str = "document") -> int:
         for i, chunk in enumerate(new_chunks)
     ]
 
-    client.table("documents").insert(rows).execute()
-    log.info("Added %d chunks from '%s'", len(new_chunks), source)
+    log.info("Inserting %d rows into Supabase...", len(rows))
+    # Insert in batches of 10 to avoid timeouts
+    batch_size = 10
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        try:
+            client.table("documents").insert(batch).execute()
+            log.info("Inserted batch %d/%d ✓", i // batch_size + 1, (len(rows) + batch_size - 1) // batch_size)
+        except Exception as exc:
+            log.error("Failed to insert batch: %s", exc)
+            raise
+
+    log.info("Added %d chunks from '%s' ✓", len(new_chunks), source)
     return len(new_chunks)
 
 
 def search_documents(query: str, top_k: int = TOP_K) -> list[dict]:
     """
     Embed query → cosine similarity search via Supabase RPC.
-    Returns top-k results: {"text": str, "source": str, "score": float}
     """
     client = _get_supabase()
     q_vec  = _embed([query])[0].tolist()
@@ -122,7 +140,6 @@ def search_documents(query: str, top_k: int = TOP_K) -> list[dict]:
 
     except Exception as exc:
         log.warning("Vector search failed, falling back to text search: %s", exc)
-        # Fallback: return recent chunks
         response = client.table("documents").select("chunk_text, filename").limit(top_k).execute()
         return [
             {"text": r.get("chunk_text", ""), "source": r.get("filename", "unknown"), "score": 0.5}
@@ -218,10 +235,12 @@ def _get_model():
             raise RuntimeError("pip install sentence-transformers")
         log.info("Loading embedding model '%s'…", EMBED_MODEL)
         _embed_model = SentenceTransformer(EMBED_MODEL)
+        log.info("Embedding model loaded ✓")
     return _embed_model
 
 
 def _embed(texts: list[str]) -> np.ndarray:
+    log.info("Encoding %d texts...", len(texts))
     vecs = _get_model().encode(
         texts,
         convert_to_numpy     = True,
@@ -229,4 +248,5 @@ def _embed(texts: list[str]) -> np.ndarray:
         show_progress_bar    = False,
         batch_size           = 32,
     )
+    log.info("Encoding done ✓")
     return vecs.astype(np.float32)
