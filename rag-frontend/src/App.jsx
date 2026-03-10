@@ -300,22 +300,62 @@ export default function App() {
     } catch (e) { notify(e.response?.data?.detail || e.message, "err"); }
   };
 
-  // ── General AI answer (no docs needed) ──────────────────────────────────
+  // ── General AI answer — streaming (no docs needed) ───────────────────────
   const askGeneralAI = async (question, aiId) => {
+    const userId = user?.uid || "default";
+    let gotStream = false;
+
+    // Fallback to non-streaming if SSE fails after 4s
+    const fallback = setTimeout(async () => {
+      if (gotStream) return;
+      try {
+        const { data } = await axios.post(`${API}/ask-general`, { question, user_id: userId });
+        patchMsg(aiId, { text: data.answer, sources: [], streaming: false });
+      } catch (e) {
+        patchMsg(aiId, {
+          text: e.response?.data?.detail || "I'm having trouble connecting right now. Please try again.",
+          sources: [], streaming: false, error: true,
+        });
+        notify("Connection error — please try again", "err");
+      } finally { setLoading(false); }
+    }, 4000);
+
     try {
-      // Use Groq directly via our backend proxy, or fallback to simple response
-      const { data } = await axios.post(`${API}/ask-general`, {
-        question,
-        user_id: user?.uid || "default",
+      const res = await fetch(`${API}/ask-general/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, user_id: userId }),
       });
-      patchMsg(aiId, { text: data.answer, sources: [], streaming: false });
-    } catch {
-      // Fallback: tell user to use doc mode or retry
-      patchMsg(aiId, {
-        text: "I'm having trouble connecting right now. Please try again in a moment.",
-        sources: [], streaming: false, error: true,
-      });
-    } finally { setLoading(false); }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const dec    = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value, { stream: true }).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const token = line.slice(6);
+          if (token === "[DONE]") {
+            clearTimeout(fallback);
+            patchMsg(aiId, { streaming: false });
+            setLoading(false);
+            return;
+          }
+          if (token.startsWith("[ERROR]")) {
+            clearTimeout(fallback);
+            patchMsg(aiId, { streaming: false, error: true });
+            setLoading(false);
+            return;
+          }
+          gotStream = true;
+          patchMsg(aiId, m => ({ text: (m.text ?? "") + token.replace(/\\n/g, "\n") }));
+        }
+      }
+    } catch (_) {
+      // fallback timer will handle it
+    }
   };
 
   // ── Send message ─────────────────────────────────────────────────────────
