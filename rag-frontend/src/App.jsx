@@ -1,5 +1,8 @@
 // =============================================================================
-//  Gyana AI  ·  App.jsx  —  with per-user document isolation
+//  Gyana AI  ·  App.jsx
+//  ✓ Mobile responsive (hamburger menu)
+//  ✓ General AI mode (no docs needed)
+//  ✓ Conversation history dashboard
 // =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,6 +23,7 @@ const auth        = getAuth(firebaseApp);
 
 const API    = import.meta.env.VITE_API_URL || "https://gyana-ai.onrender.com";
 const ACCEPT = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 
 const FILE_ICONS = {
   pdf:"📄", docx:"📝", pptx:"📊", txt:"📃",
@@ -27,18 +31,40 @@ const FILE_ICONS = {
   mp3:"🎵", wav:"🎵", m4a:"🎵", webm:"🎤",
 };
 
-const SUGGESTIONS = [
-  { title:"Summarise the main topics",   desc:"Get a clear overview of your document"      },
-  { title:"List all key definitions",    desc:"Extract important terms and meanings"        },
-  { title:"Create 5 quiz questions",     desc:"Test your understanding of the material"     },
-  { title:"Explain the hardest concept", desc:"Break down complex ideas in simple language" },
+const DOC_SUGGESTIONS = [
+  { title:"Summarise the main topics",   desc:"Get a clear overview" },
+  { title:"List all key definitions",    desc:"Extract important terms" },
+  { title:"Create 5 quiz questions",     desc:"Test your understanding" },
+  { title:"Explain the hardest concept", desc:"Break down complex ideas" },
+];
+
+const AI_SUGGESTIONS = [
+  { title:"Write a professional email",   desc:"Draft any kind of email" },
+  { title:"Explain a complex topic",      desc:"Simple clear explanations" },
+  { title:"Help me brainstorm ideas",     desc:"Creative thinking partner" },
+  { title:"Review and improve my text",   desc:"Polish your writing" },
 ];
 
 const fileExt  = (n="") => n.split(".").pop()?.toLowerCase() ?? "";
 const fileIcon = (n)    => FILE_ICONS[fileExt(n)] ?? "📁";
 const fileSz   = (b)    => b < 1_048_576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1_048_576).toFixed(1)} MB`;
 const timeNow  = ()     => new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+const dateStr  = ()     => new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"});
 const uid      = ()     => crypto.randomUUID();
+
+// ── Storage helpers (conversation history) ──────────────────────────────────
+const CONV_KEY = (userId) => `gyana_conversations_${userId}`;
+
+const loadConversations = (userId) => {
+  try {
+    const raw = localStorage.getItem(CONV_KEY(userId));
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+const saveConversations = (userId, convs) => {
+  try { localStorage.setItem(CONV_KEY(userId), JSON.stringify(convs)); } catch {}
+};
 
 // ── Login Page ────────────────────────────────────────────────────────────────
 function LoginPage() {
@@ -58,22 +84,24 @@ function LoginPage() {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
-      justifyContent:"center", height:"100vh", background:"#0a0a0a",
-      color:"#fff", fontFamily:"system-ui, sans-serif" }}>
+      justifyContent:"center", height:"100dvh", background:"#0a0a0a",
+      color:"#fff", fontFamily:"system-ui, sans-serif", padding:"16px" }}>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
-        gap:"1rem", padding:"2.5rem", borderRadius:"16px",
+        gap:"1rem", padding:"clamp(1.5rem,5vw,2.5rem)", borderRadius:"16px",
         background:"#111", border:"1px solid #1f1f1f",
-        boxShadow:"0 0 60px rgba(0,200,180,0.08)" }}>
-        <div style={{ width:56, height:56, borderRadius:"50%",
+        boxShadow:"0 0 60px rgba(0,200,180,0.08)",
+        width:"100%", maxWidth:"360px" }}>
+        <div style={{ width:52, height:52, borderRadius:"50%",
           background:"linear-gradient(135deg,#0d9488,#0f766e)",
-          display:"flex", alignItems:"center", justifyContent:"center", fontSize:26 }}>🧠</div>
-        <h1 style={{ margin:0, fontSize:"1.6rem", fontWeight:700, letterSpacing:"-0.5px" }}>Gyana AI</h1>
-        <p style={{ margin:0, color:"#666", fontSize:"0.9rem" }}>Document Intelligence · Sign in to continue</p>
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>🧠</div>
+        <h1 style={{ margin:0, fontSize:"clamp(1.3rem,4vw,1.6rem)", fontWeight:700 }}>Gyana AI</h1>
+        <p style={{ margin:0, color:"#666", fontSize:"0.85rem", textAlign:"center" }}>Document Intelligence · Sign in to continue</p>
         <button onClick={handleGoogle} disabled={loading} style={{
           marginTop:"0.5rem", display:"flex", alignItems:"center", gap:"10px",
           background:"#fff", color:"#111", border:"none", padding:"11px 24px",
-          borderRadius:"8px", fontSize:"0.95rem", fontWeight:600,
-          cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1, transition:"opacity 0.2s" }}>
+          borderRadius:"8px", fontSize:"0.9rem", fontWeight:600,
+          cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1,
+          width:"100%", justifyContent:"center" }}>
           <svg width="18" height="18" viewBox="0 0 48 48">
             <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
             <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
@@ -82,8 +110,8 @@ function LoginPage() {
           </svg>
           {loading ? "Signing in…" : "Continue with Google"}
         </button>
-        {error && <p style={{ color:"#f87171", fontSize:"0.8rem", margin:0, maxWidth:260, textAlign:"center" }}>{error}</p>}
-        <p style={{ color:"#333", fontSize:"0.75rem", margin:0, marginTop:"0.5rem" }}>Your documents stay private to your account</p>
+        {error && <p style={{ color:"#f87171", fontSize:"0.75rem", margin:0, textAlign:"center" }}>{error}</p>}
+        <p style={{ color:"#333", fontSize:"0.7rem", margin:0, textAlign:"center" }}>Your documents stay private to your account</p>
       </div>
     </div>
   );
@@ -124,16 +152,21 @@ function MD({ text = "" }) {
 
 // =============================================================================
 export default function App() {
-  const [user,    setUser]    = useState(undefined);
-  const [docs,    setDocs]    = useState([]);
-  const [msgs,    setMsgs]    = useState([]);
-  const [input,   setInput]   = useState("");
-  const [loading, setLoading] = useState(false);
-  const [drag,    setDrag]    = useState(false);
-  const [micOn,   setMicOn]   = useState(false);
-  const [micSec,  setMicSec]  = useState(0);
-  const [toast,   setToast]   = useState(null);
-  const [copied,  setCopied]  = useState(null);
+  const [user,       setUser]       = useState(undefined);
+  const [docs,       setDocs]       = useState([]);
+  const [msgs,       setMsgs]       = useState([]);
+  const [input,      setInput]      = useState("");
+  const [loading,    setLoading]    = useState(false);
+  const [drag,       setDrag]       = useState(false);
+  const [micOn,      setMicOn]      = useState(false);
+  const [micSec,     setMicSec]     = useState(0);
+  const [toast,      setToast]      = useState(null);
+  const [copied,     setCopied]     = useState(null);
+  const [mode,       setMode]       = useState("docs"); // "docs" | "ai"
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversations, setConversations] = useState([]);
+  const [activeConvId,  setActiveConvId]  = useState(null);
+  const [sidebarTab, setSidebarTab] = useState("docs"); // "docs" | "history"
 
   const fileRef   = useRef(null);
   const taRef     = useRef(null);
@@ -141,23 +174,38 @@ export default function App() {
   const recRef    = useRef(null);
   const micTmr    = useRef(null);
   const abortRef  = useRef(null);
+  const currentConvRef = useRef(null);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => setUser(u ?? null));
+    const unsub = onAuthStateChanged(auth, u => {
+      setUser(u ?? null);
+      if (u) {
+        const convs = loadConversations(u.uid);
+        setConversations(convs);
+      }
+    });
     return unsub;
   }, []);
 
   const readyDocs = docs.filter(d => d.status === "ready");
-
-  // Helper to get auth headers with user ID
   const authHeaders = () => ({ "x-user-id": user?.uid || "default" });
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
   useEffect(() => {
     const ta = taRef.current; if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
   }, [input]);
+
+  // Close sidebar on outside click (mobile)
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const handler = (e) => {
+      if (!e.target.closest('.sidebar')) setSidebarOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [sidebarOpen]);
 
   const notify = useCallback((msg, type="ok") => {
     setToast({ msg, type }); setTimeout(() => setToast(null), 3000);
@@ -168,6 +216,60 @@ export default function App() {
     p.map(m => m.id === id ? (typeof upd==="function" ? {...m,...upd(m)} : {...m,...upd}) : m)
   );
 
+  // ── Save conversation ────────────────────────────────────────────────────
+  const saveCurrentConversation = useCallback((messages, convId, title) => {
+    if (!user || messages.length === 0) return;
+    const convs = loadConversations(user.uid);
+    const existing = convs.findIndex(c => c.id === convId);
+    const conv = {
+      id: convId,
+      title: title || messages[0]?.text?.slice(0,40) || "New conversation",
+      messages,
+      date: dateStr(),
+      timestamp: Date.now(),
+      mode,
+    };
+    if (existing >= 0) convs[existing] = conv;
+    else convs.unshift(conv);
+    // Keep max 50 conversations
+    const trimmed = convs.slice(0, 50);
+    saveConversations(user.uid, trimmed);
+    setConversations(trimmed);
+  }, [user, mode]);
+
+  // ── Load conversation ────────────────────────────────────────────────────
+  const loadConversation = (conv) => {
+    setMsgs(conv.messages);
+    setActiveConvId(conv.id);
+    currentConvRef.current = conv.id;
+    setMode(conv.mode || "docs");
+    setSidebarOpen(false);
+  };
+
+  // ── Delete conversation ──────────────────────────────────────────────────
+  const deleteConversation = (convId, e) => {
+    e.stopPropagation();
+    const convs = loadConversations(user.uid).filter(c => c.id !== convId);
+    saveConversations(user.uid, convs);
+    setConversations(convs);
+    if (activeConvId === convId) {
+      setMsgs([]); setActiveConvId(null); currentConvRef.current = null;
+    }
+  };
+
+  // ── Start new conversation ───────────────────────────────────────────────
+  const startNewConversation = () => {
+    if (msgs.length > 0 && currentConvRef.current) {
+      saveCurrentConversation(msgs, currentConvRef.current);
+    }
+    setMsgs([]);
+    setInput("");
+    setActiveConvId(null);
+    currentConvRef.current = null;
+    setSidebarOpen(false);
+  };
+
+  // ── File upload ──────────────────────────────────────────────────────────
   const handleFiles = useCallback(async (files) => {
     for (const file of Array.from(files)) {
       const id = uid();
@@ -194,14 +296,40 @@ export default function App() {
   const clearDocs = async () => {
     try {
       await axios.delete(`${API}/documents`, { headers: authHeaders() });
-      setDocs([]); setMsgs([]); notify("Knowledge base cleared");
+      setDocs([]); notify("Knowledge base cleared");
     } catch (e) { notify(e.response?.data?.detail || e.message, "err"); }
   };
 
+  // ── General AI answer (no docs needed) ──────────────────────────────────
+  const askGeneralAI = async (question, aiId) => {
+    try {
+      // Use Groq directly via our backend proxy, or fallback to simple response
+      const { data } = await axios.post(`${API}/ask-general`, {
+        question,
+        user_id: user?.uid || "default",
+      });
+      patchMsg(aiId, { text: data.answer, sources: [], streaming: false });
+    } catch {
+      // Fallback: tell user to use doc mode or retry
+      patchMsg(aiId, {
+        text: "I'm having trouble connecting right now. Please try again in a moment.",
+        sources: [], streaming: false, error: true,
+      });
+    } finally { setLoading(false); }
+  };
+
+  // ── Send message ─────────────────────────────────────────────────────────
   const send = useCallback(async (override) => {
     const q = (override ?? input).trim();
     if (!q || loading) return;
-    if (!readyDocs.length) { notify("Upload a document first", "err"); return; }
+    if (mode === "docs" && !readyDocs.length) { notify("Upload a document first, or switch to AI mode", "err"); return; }
+
+    // Start new conversation if needed
+    if (!currentConvRef.current) {
+      const newId = uid();
+      currentConvRef.current = newId;
+      setActiveConvId(newId);
+    }
 
     pushMsg({ role:"user", text:q, time:timeNow() });
     setInput(""); setLoading(true);
@@ -209,8 +337,14 @@ export default function App() {
     const aiId = uid();
     pushMsg({ id:aiId, role:"ai", text:"", time:timeNow(), sources:[], streaming:true, error:false });
 
-    const userId = user?.uid || "default";
+    // General AI mode — no documents needed
+    if (mode === "ai") {
+      await askGeneralAI(q, aiId);
+      return;
+    }
 
+    // Document RAG mode
+    const userId = user?.uid || "default";
     let gotStream = false;
     const fallback = setTimeout(async () => {
       if (gotStream) return;
@@ -227,8 +361,7 @@ export default function App() {
     let aborted = false; abortRef.current = () => { aborted = true; };
     try {
       const res = await fetch(`${API}/ask/stream`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
+        method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({ question: q, user_id: userId }),
       });
       if (!res.ok) throw new Error();
@@ -245,8 +378,17 @@ export default function App() {
         }
       }
     } catch (_) {}
-  }, [input, loading, readyDocs, notify, user]);
+  }, [input, loading, readyDocs, notify, user, mode]);
 
+  // Auto-save conversation after each AI response
+  useEffect(() => {
+    const lastMsg = msgs[msgs.length - 1];
+    if (lastMsg?.role === "ai" && !lastMsg?.streaming && currentConvRef.current && user) {
+      saveCurrentConversation(msgs, currentConvRef.current);
+    }
+  }, [msgs, user, saveCurrentConversation]);
+
+  // ── Mic ──────────────────────────────────────────────────────────────────
   const startMic = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
@@ -272,101 +414,187 @@ export default function App() {
   const stopMic  = useCallback(()=>{ recRef.current?.state!=="inactive" && recRef.current?.stop(); },[]);
   const fmtMic   = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
   const copyMsg  = (id, text) => { navigator.clipboard.writeText(text).catch(()=>{}); setCopied(id); setTimeout(()=>setCopied(null),1800); };
-  const handleSignOut = async () => { await signOut(auth); setDocs([]); setMsgs([]); };
+  const handleSignOut = async () => { await signOut(auth); setDocs([]); setMsgs([]); setConversations([]); };
 
+  // ── Auth guards ───────────────────────────────────────────────────────────
   if (user === undefined) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
-      height:"100vh", background:"#0a0a0a", color:"#555", fontSize:"0.9rem" }}>Loading…</div>
+      height:"100dvh", background:"#0a0a0a", color:"#555", fontSize:"0.9rem" }}>Loading…</div>
   );
   if (user === null) return <LoginPage />;
 
+  const suggestions = mode === "ai" ? AI_SUGGESTIONS : DOC_SUGGESTIONS;
+  const placeholder = micOn ? "Recording — speak your question…"
+    : mode === "ai" ? "Ask me anything…"
+    : readyDocs.length === 0 ? "Upload a document to start…"
+    : "Ask anything about your documents…";
+
+  // ── Main App ──────────────────────────────────────────────────────────────
   return (
     <div className="shell">
-      <aside className="sidebar">
+      {/* Mobile overlay */}
+      <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>
+
+      {/* Sidebar */}
+      <aside className={`sidebar${sidebarOpen?" open":""}`}>
         <div className="sb-sheen"/>
+
         <div className="sb-brand">
           <div className="sb-icon"><BrainSvg/></div>
           <div>
             <div className="sb-name">Gyana AI</div>
             <div className="sb-tagline">Document Intelligence</div>
           </div>
+          <button className="sb-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
         </div>
 
+        {/* User info */}
         <div style={{ display:"flex", alignItems:"center", gap:"8px",
           padding:"8px 12px", borderRadius:"8px", background:"#111",
-          border:"1px solid #1a1a1a", margin:"0 0 10px 0" }}>
-          {user.photoURL && <img src={user.photoURL} alt="" width={24} height={24} style={{borderRadius:"50%"}}/>}
-          <span style={{ fontSize:"0.75rem", color:"#aaa", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          border:"1px solid #1a1a1a", margin:"10px 12px 8px" }}>
+          {user.photoURL && <img src={user.photoURL} alt="" width={22} height={22} style={{borderRadius:"50%"}}/>}
+          <span style={{ fontSize:"0.7rem", color:"#aaa", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {user.displayName || user.email}
           </span>
           <button onClick={handleSignOut} style={{ background:"none", border:"none", color:"#555",
-            cursor:"pointer", fontSize:"0.7rem", padding:"2px 6px", borderRadius:"4px" }} title="Sign out">↩</button>
+            cursor:"pointer", fontSize:"0.65rem", padding:"2px 6px", borderRadius:"4px" }} title="Sign out">↩</button>
         </div>
 
-        <button className="new-btn" onClick={()=>{setMsgs([]); setInput("");}}>
+        <button className="new-btn" onClick={startNewConversation}>
           <PlusSvg/> New conversation
         </button>
 
-        <p className="sb-label">Knowledge Base</p>
-
-        <div className={`dz${drag?" dz-over":""}`} role="button" tabIndex={0}
-          onClick={()=>fileRef.current?.click()}
-          onDragOver={e=>{e.preventDefault();setDrag(true);}}
-          onDragLeave={()=>setDrag(false)} onDrop={onDrop}
-          onKeyDown={e=>e.key==="Enter"&&fileRef.current?.click()}>
-          <div className="dz-ring">{drag?"📂":"⊕"}</div>
-          <span className="dz-t">Drop files or click to upload</span>
-          <span className="dz-s">PDF · DOCX · PPTX · TXT · Images · Audio</span>
+        {/* Sidebar tabs */}
+        <div style={{ display:"flex", margin:"0 12px 8px", gap:"4px" }}>
+          <button onClick={()=>setSidebarTab("docs")} style={{
+            flex:1, padding:"6px", borderRadius:"7px", border:"none",
+            background: sidebarTab==="docs" ? "var(--teal-dim)" : "transparent",
+            color: sidebarTab==="docs" ? "var(--teal-text)" : "var(--ink-3)",
+            fontFamily:"var(--ui)", fontSize:"11px", fontWeight:500, cursor:"pointer",
+            borderBottom: sidebarTab==="docs" ? "1px solid var(--teal-line)" : "1px solid transparent",
+          }}>📄 Documents</button>
+          <button onClick={()=>setSidebarTab("history")} style={{
+            flex:1, padding:"6px", borderRadius:"7px", border:"none",
+            background: sidebarTab==="history" ? "var(--teal-dim)" : "transparent",
+            color: sidebarTab==="history" ? "var(--teal-text)" : "var(--ink-3)",
+            fontFamily:"var(--ui)", fontSize:"11px", fontWeight:500, cursor:"pointer",
+            borderBottom: sidebarTab==="history" ? "1px solid var(--teal-line)" : "1px solid transparent",
+          }}>🕘 History</button>
         </div>
-        <input ref={fileRef} type="file" hidden multiple accept={ACCEPT} onChange={e=>handleFiles(e.target.files)}/>
 
-        <div className="doc-list">
-          {docs.map((d,i)=>(
-            <div key={d.id} className={`doc-row${d.status==="error"?" doc-err":""}`} style={{animationDelay:`${i*.05}s`}}>
-              <div className="doc-ico">{fileIcon(d.name)}</div>
-              <div className="doc-info">
-                <div className="doc-name" title={d.name}>{d.name}</div>
-                <div className="doc-meta">{d.size}{d.lang&&d.lang!=="unknown"?` · ${d.lang.toUpperCase()}`:""}{d.chunks?` · ${d.chunks} chunks`:""}</div>
-                {d.status==="uploading"&&<div className="doc-bar"><div className="doc-fill" style={{width:`${d.progress}%`}}/></div>}
-              </div>
-              <div className={`doc-dot ${d.status}`}/>
+        {sidebarTab === "docs" ? (
+          <>
+            <p className="sb-label">Knowledge Base</p>
+            <div className={`dz${drag?" dz-over":""}`} role="button" tabIndex={0}
+              onClick={()=>fileRef.current?.click()}
+              onDragOver={e=>{e.preventDefault();setDrag(true);}}
+              onDragLeave={()=>setDrag(false)} onDrop={onDrop}
+              onKeyDown={e=>e.key==="Enter"&&fileRef.current?.click()}>
+              <div className="dz-ring">{drag?"📂":"⊕"}</div>
+              <span className="dz-t">Drop files or click to upload</span>
+              <span className="dz-s">PDF · DOCX · PPTX · TXT · Images · Audio</span>
             </div>
-          ))}
-        </div>
-
-        {readyDocs.length>0&&<button className="clear-btn" onClick={clearDocs}>🗑 Remove all documents</button>}
+            <input ref={fileRef} type="file" hidden multiple accept={ACCEPT} onChange={e=>handleFiles(e.target.files)}/>
+            <div className="doc-list">
+              {docs.map((d,i)=>(
+                <div key={d.id} className={`doc-row${d.status==="error"?" doc-err":""}`} style={{animationDelay:`${i*.05}s`}}>
+                  <div className="doc-ico">{fileIcon(d.name)}</div>
+                  <div className="doc-info">
+                    <div className="doc-name" title={d.name}>{d.name}</div>
+                    <div className="doc-meta">{d.size}{d.lang&&d.lang!=="unknown"?` · ${d.lang.toUpperCase()}`:""}{d.chunks?` · ${d.chunks} chunks`:""}</div>
+                    {d.status==="uploading"&&<div className="doc-bar"><div className="doc-fill" style={{width:`${d.progress}%`}}/></div>}
+                  </div>
+                  <div className={`doc-dot ${d.status}`}/>
+                </div>
+              ))}
+            </div>
+            {readyDocs.length>0&&<button className="clear-btn" onClick={clearDocs}>🗑 Remove all documents</button>}
+          </>
+        ) : (
+          <>
+            <p className="sb-label">Chat History</p>
+            <div className="conv-list">
+              {conversations.length === 0 ? (
+                <div className="conv-empty">
+                  <div style={{fontSize:"24px",marginBottom:"8px"}}>💬</div>
+                  No conversations yet.<br/>Start chatting to save history!
+                </div>
+              ) : conversations.map(conv => (
+                <div key={conv.id}
+                  className={`conv-item${activeConvId===conv.id?" active":""}`}
+                  onClick={()=>loadConversation(conv)}>
+                  <div className="conv-ico">{conv.mode==="ai"?"🤖":"📄"}</div>
+                  <div className="conv-info">
+                    <div className="conv-title">{conv.title}</div>
+                    <div className="conv-meta">{conv.date} · {conv.messages.length} msgs</div>
+                  </div>
+                  <button className="conv-del" onClick={(e)=>deleteConversation(conv.id,e)} title="Delete">✕</button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="sb-spacer"/>
+
         <div className="sb-foot">
           <div className="model-pill">
             <div className="model-led"/>
-            <div><div className="model-name">llama3-70b-8192</div><div className="model-sub">Groq · Supabase · MiniLM-L6</div></div>
+            <div>
+              <div className="model-name">LLaMA 3.3 70B</div>
+              <div className="model-sub">Groq · Supabase · HuggingFace</div>
+            </div>
           </div>
-          <p className="doc-count">{readyDocs.length===0?"No documents indexed":`${readyDocs.length} document${readyDocs.length>1?"s":""} in context`}</p>
+          <p className="doc-count">
+            {mode==="ai" ? "General AI mode" : readyDocs.length===0 ? "No documents indexed" : `${readyDocs.length} document${readyDocs.length>1?"s":""} in context`}
+          </p>
         </div>
       </aside>
 
+      {/* Main panel */}
       <div className="main">
         <div className="glow g1"/><div className="glow g2"/>
+
         <div className="topbar">
           <div className="tb-left">
-            <span className="tb-title">Query Interface</span>
-            {readyDocs.length>0&&(
-              <div className="ctx-pill"><span className="ctx-led"/><span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span></div>
+            <button className="menu-btn" onClick={()=>setSidebarOpen(true)}>
+              <MenuSvg/>
+            </button>
+            <span className="tb-title">{mode==="ai"?"AI Assistant":"Query Interface"}</span>
+            {mode==="docs" && readyDocs.length>0&&(
+              <div className="ctx-pill">
+                <span className="ctx-led"/>
+                <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
+              </div>
             )}
           </div>
-          {msgs.length>0&&<button className="top-btn" onClick={()=>{setMsgs([]);notify("Chat cleared");}}>Clear chat</button>}
+          <div className="tb-right">
+            {/* Mode toggle */}
+            <div className="mode-toggle">
+              <button className={`mode-btn${mode==="docs"?" active":""}`} onClick={()=>setMode("docs")}>
+                📄 Docs
+              </button>
+              <button className={`mode-btn${mode==="ai"?" active":""}`} onClick={()=>setMode("ai")}>
+                🤖 AI
+              </button>
+            </div>
+            {msgs.length>0&&<button className="top-btn" onClick={()=>{startNewConversation();}}>Clear</button>}
+          </div>
         </div>
 
         <div className="feed">
           {msgs.length===0 ? (
             <div className="welcome">
-              <div className="w-orb"><BrainSvg size={34}/></div>
-              <h2 className="w-h">How can I help you today?</h2>
-              <p className="w-p">Upload your documents and ask anything.<br/>Every answer comes strictly from your files.</p>
-              {readyDocs.length>0&&(
+              <div className="w-orb"><BrainSvg size={30}/></div>
+              <h2 className="w-h">{mode==="ai"?"What can I help you with?":"How can I help you today?"}</h2>
+              <p className="w-p">
+                {mode==="ai"
+                  ? "Ask me anything — I can write, explain, brainstorm, and more."
+                  : "Upload your documents and ask anything.\nEvery answer comes strictly from your files."}
+              </p>
+              {(mode==="ai" || readyDocs.length>0)&&(
                 <div className="sug-grid">
-                  {SUGGESTIONS.map(s=>(
+                  {suggestions.map(s=>(
                     <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
                       <span className="sug-t">{s.title}</span>
                       <span className="sug-d">{s.desc}</span>
@@ -387,7 +615,7 @@ export default function App() {
               ) : (
                 <div key={msg.id} className="turn">
                   <div className="a-row">
-                    <div className="a-av"><BrainSvg size={14}/></div>
+                    <div className="a-av"><BrainSvg size={13}/></div>
                     <div className="a-body">
                       <div className="a-meta"><span className="a-name">Gyana AI</span><span className="a-time">{msg.time}</span></div>
                       <div className={`a-text${msg.error?" a-err":""}`}>
@@ -419,7 +647,7 @@ export default function App() {
         <div className="inp-wrap">
           <div className="inp-box">
             <textarea ref={taRef} value={input} rows={1}
-              placeholder={micOn?"Recording — speak your question…":readyDocs.length===0?"Upload a document to start…":"Ask anything about your documents…"}
+              placeholder={placeholder}
               disabled={loading||micOn}
               onChange={e=>setInput(e.target.value)}
               onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
@@ -429,14 +657,17 @@ export default function App() {
                 <button className={`tool-btn${micOn?" mic-on":""}`} onClick={micOn?stopMic:startMic}>
                   {micOn?<span className="rec-row"><span className="rec-dot"/><span className="rec-t">{fmtMic(micSec)}</span></span>:<MicSvg/>}
                 </button>
-                <button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSvg/></button>
+                {mode==="docs"&&<button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSvg/></button>}
               </div>
               <button className="send-btn" onClick={()=>send()} disabled={loading||!input.trim()||micOn}>
                 {loading?<span className="spin"/>:<UpSvg/>}
               </button>
             </div>
           </div>
-          <p className="inp-hint">Gyana AI answers only from your uploaded documents &nbsp;·&nbsp;<kbd>Enter</kbd> to send &nbsp;·&nbsp;<kbd>Shift+Enter</kbd> new line</p>
+          <p className="inp-hint">
+            {mode==="ai" ? "AI mode — answers any question" : "Document mode — answers from your files"}
+            &nbsp;·&nbsp;<kbd>Enter</kbd> to send &nbsp;·&nbsp;<kbd>Shift+Enter</kbd> new line
+          </p>
         </div>
       </div>
 
@@ -445,10 +676,11 @@ export default function App() {
   );
 }
 
-const BrainSvg   = ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-1.07-3 2.5 2.5 0 0 1 .98-4.76V9a2.5 2.5 0 0 1 2.5-2.5zm5 0A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 1.07-3 2.5 2.5 0 0 0-.98-4.76V9a2.5 2.5 0 0 0-2.5-2.5z"/></svg>;
-const PlusSvg    = ()          => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
-const MicSvg     = ()          => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M8 22h8"/></svg>;
-const AttachSvg  = ()          => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
-const UpSvg      = ()          => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>;
-const CopySvg    = ()          => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
-const CheckSvg   = ()          => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>;
+const BrainSvg  = ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-1.07-3 2.5 2.5 0 0 1 .98-4.76V9a2.5 2.5 0 0 1 2.5-2.5zm5 0A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 1.07-3 2.5 2.5 0 0 0-.98-4.76V9a2.5 2.5 0 0 0-2.5-2.5z"/></svg>;
+const PlusSvg   = ()         => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+const MicSvg    = ()         => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M8 22h8"/></svg>;
+const AttachSvg = ()         => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
+const UpSvg     = ()         => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>;
+const CopySvg   = ()         => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
+const CheckSvg  = ()         => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>;
+const MenuSvg   = ()         => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>;

@@ -105,6 +105,11 @@ class AskResponse(BaseModel):
     detected_language: Optional[str] = None
 
 
+class GeneralAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000)
+    user_id:  str = Field(default="default")
+
+
 class SpeechQueryResponse(BaseModel):
     transcribed_question: str
     answer: str
@@ -232,6 +237,100 @@ async def ask_stream(body: AskRequest):
                 yield f"data: {safe}\n\n"
         except Exception as exc:
             log.exception("Streaming error: %s", exc)
+            yield f"data: [ERROR] {exc}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
+
+
+# ── General AI (no documents needed) ─────────────────────────────────────────
+@app.post("/ask-general", response_model=AskResponse, tags=["Query"])
+async def ask_general(body: GeneralAskRequest):
+    """
+    General AI query — no documents required.
+    Answers any question just like ChatGPT / Claude.
+    """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(500, detail="GROQ_API_KEY not configured.")
+
+    try:
+        from groq import Groq
+        client = Groq(api_key=groq_key)
+        response = client.chat.completions.create(
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Gyana AI, a helpful, accurate, and friendly AI assistant. "
+                        "Answer questions clearly and concisely. "
+                        "Use markdown formatting (bold, lists, code blocks) when it helps readability. "
+                        "If you don't know something, say so honestly."
+                    ),
+                },
+                {"role": "user", "content": body.question},
+            ],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        answer = response.choices[0].message.content.strip()
+        log.info("General ask answered for user=%s", body.user_id)
+        return AskResponse(answer=answer, sources=[], chunks_used=0)
+
+    except Exception as exc:
+        log.exception("General ask failed: %s", exc)
+        raise HTTPException(500, detail=f"AI error: {exc}") from exc
+
+
+# ── General AI (streaming SSE) ────────────────────────────────────────────────
+@app.post("/ask-general/stream", tags=["Query"])
+async def ask_general_stream(body: GeneralAskRequest):
+    """
+    Streaming version of general AI — streams tokens back as SSE.
+    """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(500, detail="GROQ_API_KEY not configured.")
+
+    async def event_generator():
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_key)
+            stream = client.chat.completions.create(
+                model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Gyana AI, a helpful, accurate, and friendly AI assistant. "
+                            "Answer questions clearly and concisely. "
+                            "Use markdown formatting when it helps readability. "
+                            "If you don't know something, say so honestly."
+                        ),
+                    },
+                    {"role": "user", "content": body.question},
+                ],
+                temperature=0.7,
+                max_tokens=2048,
+                stream=True,
+            )
+            for chunk in stream:
+                token = chunk.choices[0].delta.content or ""
+                if token:
+                    safe = token.replace("\n", "\\n")
+                    yield f"data: {safe}\n\n"
+        except Exception as exc:
+            log.exception("General streaming error: %s", exc)
             yield f"data: [ERROR] {exc}\n\n"
         finally:
             yield "data: [DONE]\n\n"
