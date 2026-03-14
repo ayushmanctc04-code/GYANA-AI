@@ -619,6 +619,7 @@ export default function App() {
   const [sidebarTab,    setSidebarTab]    = useState("docs");
   const [guruOpen,      setGuruOpen]      = useState(false);
 
+  const feedRef        = useRef(null);
   const fileRef        = useRef(null);
   const taRef          = useRef(null);
   const bottomRef      = useRef(null);
@@ -653,7 +654,17 @@ export default function App() {
   const readyDocs   = docs.filter(d=>d.status==="ready");
   const authHeaders = useCallback(()=>({"x-user-id":user?.uid||"default"}),[user]);
 
-  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
+  // Scroll only when new message arrives or AI streams — never on welcome screen
+  useEffect(() => {
+    if (msgs.length === 0) return;
+    const last = msgs[msgs.length - 1];
+    if (last?.streaming || msgs.length !== lastMsgCountRef.current) {
+      lastMsgCountRef.current = msgs.length;
+      requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      });
+    }
+  }, [msgs]);
   useEffect(()=>{const ta=taRef.current;if(!ta)return;ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,140)+"px";},[input]);
   useEffect(()=>{
     if(!sidebarOpen) return;
@@ -980,38 +991,40 @@ export default function App() {
             </div>
           </div>
 
-          <div className="feed">
-            {msgs.length===0?(
-              <div className="welcome">
-                <div className="orb-wrap">
-                  <YantraSmall/>
-                  <div className="ring1"/><div className="ring2"/>
-                  <div className="orb" onClick={()=>setGuruOpen(true)}>
-                    <ChakraSVG size={36} op=".78"/>
-                  </div>
+          <div className="feed" ref={feedRef}>
+            {/* Welcome screen */}
+            <div className="welcome" style={{display:msgs.length===0?"flex":"none"}}>
+              <div className="orb-wrap">
+                <YantraSmall/>
+                <div className="ring1"/><div className="ring2"/>
+                <div className="orb" onClick={()=>setGuruOpen(true)}>
+                  <ChakraSVG size={36} op=".78"/>
                 </div>
-                <h1 className="wh">Hey <em>Guru</em></h1>
-                <div className="wsub">Gyana AI · Knowledge System</div>
-                <p className="wp">
-                  {mode==="ai"
-                    ?"Your personal guru — friend, advisor, teacher, and companion."
-                    :<>Upload documents and ask anything.<br/>Or say <span>"Hey Guru"</span> to activate live voice.</>}
-                </p>
-                <button className="guru-cta" onClick={()=>setGuruOpen(true)}>
-                  <ChakraSVG size={12} op=".65"/> Enter Guru Mode
-                </button>
-                {(mode==="ai"||readyDocs.length>0)&&(
-                  <div className="sug-grid">
-                    {suggestions.map(s=>(
-                      <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
-                        <span className="sug-t">{s.title}</span>
-                        <span className="sug-d">{s.desc}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
-            ):(
+              <h1 className="wh">Hey <em>Guru</em></h1>
+              <div className="wsub">Gyana AI · Knowledge System</div>
+              <p className="wp">
+                {mode==="ai"
+                  ?"Your personal guru — friend, advisor, teacher, and companion."
+                  :<>Upload documents and ask anything.<br/>Or say <span>"Hey Guru"</span> to activate live voice.</>}
+              </p>
+              <button className="guru-cta" onClick={()=>setGuruOpen(true)}>
+                <ChakraSVG size={12} op=".65"/> Enter Guru Mode
+              </button>
+              {(mode==="ai"||readyDocs.length>0)&&(
+                <div className="sug-grid">
+                  {suggestions.map(s=>(
+                    <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
+                      <span className="sug-t">{s.title}</span>
+                      <span className="sug-d">{s.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Messages */}
+            {msgs.length>0&&(
               <div className="msgs">
                 {msgs.map(msg=>msg.role==="user"?(
                   <div key={msg.id} className="turn">
@@ -1055,7 +1068,6 @@ export default function App() {
               </div>
             )}
           </div>
-
           <div className="inp-wrap">
             <div className="inp-box">
               <textarea ref={taRef} value={input} rows={1} placeholder={placeholder}
