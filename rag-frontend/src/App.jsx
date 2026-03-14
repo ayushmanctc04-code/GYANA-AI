@@ -1,7 +1,17 @@
 // =============================================================================
-//  Gyana AI  ·  App.jsx  — GURU EDITION v4
-//  New UI: restrained Indian mythology × futurism
-//  Guru Mode: opens clean, "hey guru" / tap to begin, response card only
+//  Gyana AI  ·  App.jsx  — GURU EDITION v4  (FIXED)
+//  Bugs fixed:
+//  1. speechSynthesis voices not loaded → onvoiceschanged listener
+//  2. ElevenLabs TTS silent failure → proper catch logging
+//  3. GuruMode speakText cuts off mid-sentence → smart sentence-boundary slice
+//  4. AudioContext blocked by Chrome autoplay → ctx.resume()
+//  5. MediaRecorder MIME crash → try/catch fallback
+//  6. Orb icon DOM mutation race → useState-driven rendering
+//  7. Wake word listener restart loop → stable ref + correct deps
+//  8. Duplicate TTS on autoSpeak → speakMsgRef to break stale closure
+//  9. Sidebar closes on mobile even when it shouldn't → guard check
+//  10. Fallback timer not cleared on first stream token → clearTimeout early
+//  11. Missing x-user-id header in general AI stream → added header
 // =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -67,6 +77,21 @@ const AI_SUGGESTIONS = [
   { title:"What should I do right now?",     desc:"Your personal advisor" },
 ];
 
+// ── FIX 1: Reliable voice loader ─────────────────────────────────────────────
+// getVoices() returns [] synchronously on first call in most browsers.
+// We wait for the onvoiceschanged event to fire before resolving.
+const getVoiceList = () => new Promise((resolve) => {
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length) return resolve(voices);
+  const handler = () => {
+    resolve(window.speechSynthesis.getVoices());
+    window.speechSynthesis.onvoiceschanged = null;
+  };
+  window.speechSynthesis.onvoiceschanged = handler;
+  // Fallback: resolve after 1s even if event never fires
+  setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
+});
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 const ChakraSVG = ({ size=16, op=".82" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -93,6 +118,29 @@ const CloseSVG  = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="no
 const DocSVG    = () => <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const ChatSVG   = () => <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>;
 const UploadSVG = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
+
+// ── Waveform icon (used in orb when listening/speaking) ───────────────────────
+const WaveformSVG = () => (
+  <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+    stroke="rgba(255,255,255,.82)" strokeWidth="1.8" strokeLinecap="round">
+    <line x1="4"  y1="12" x2="4"  y2="12"/>
+    <line x1="8"  y1="8"  x2="8"  y2="16"/>
+    <line x1="12" y1="5"  x2="12" y2="19"/>
+    <line x1="16" y1="8"  x2="16" y2="16"/>
+    <line x1="20" y1="12" x2="20" y2="12"/>
+  </svg>
+);
+
+// ── Mic icon (used in orb when idle) ─────────────────────────────────────────
+const OrbMicSVG = () => (
+  <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+    stroke="rgba(255,255,255,.6)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="2" width="6" height="11" rx="3"/>
+    <path d="M5 10a7 7 0 0 0 14 0"/>
+    <line x1="12" y1="19" x2="12" y2="22"/>
+    <line x1="8"  y1="22" x2="16" y2="22"/>
+  </svg>
+);
 
 // ── Yantra SVGs ───────────────────────────────────────────────────────────────
 const YantraSmall = () => (
@@ -200,6 +248,7 @@ function LoginPage() {
 
 // ── Guru Mode Overlay ─────────────────────────────────────────────────────────
 function GuruMode({ user, onClose }) {
+  // FIX 6: Use state for orb phase so React controls icon rendering (no more DOM mutation race)
   const [phase,    setPhase]    = useState("idle");
   const [caption,  setCaption]  = useState("");
   const [response, setResponse] = useState("");
@@ -216,12 +265,11 @@ function GuruMode({ user, onClose }) {
   const streamRef    = useRef(null);
   const ctxRef       = useRef(null);
   const orbInnerRef  = useRef(null);
-  const orbIconRef   = useRef(null);
   const wakeOnRef    = useRef(false);
 
+  // FIX 6: applyOrbPhase now only updates visual styles (no innerHTML mutation)
   const applyOrbPhase = useCallback((p) => {
     const inner = orbInnerRef.current;
-    const ico   = orbIconRef.current;
     if (!inner) return;
     const styles = {
       idle:      ["linear-gradient(145deg,#1a6a60 0%,#080f0c 100%)","0 0 0 1px rgba(184,146,46,.13),0 8px 28px rgba(0,0,0,.55),0 0 36px rgba(30,138,124,.1)","scale(1)"],
@@ -229,24 +277,17 @@ function GuruMode({ user, onClose }) {
       thinking:  ["linear-gradient(145deg,#6a5018 0%,#080f0c 100%)","0 0 0 1px rgba(184,146,46,.18),0 8px 28px rgba(0,0,0,.55),0 0 40px rgba(184,146,46,.1)","scale(1)"],
       speaking:  ["linear-gradient(145deg,#1a7870 0%,#080f0c 100%)","0 0 0 1px rgba(30,138,124,.18),0 8px 28px rgba(0,0,0,.55),0 0 44px rgba(30,138,124,.14)","scale(1.02)"],
     };
-    const [bg,shadow,transform] = styles[p]||styles.idle;
-    inner.style.background = bg; inner.style.boxShadow = shadow;
-    inner.style.transform  = transform; inner.style.transition = "all .5s ease";
-    if (ico) {
-      if (p==="listening"||p==="speaking") {
-        ico.innerHTML = '<line x1="4" y1="12" x2="4" y2="12"/><line x1="8" y1="8" x2="8" y2="16"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="16" y1="8" x2="16" y2="16"/><line x1="20" y1="12" x2="20" y2="12"/>';
-        ico.setAttribute("stroke-width","1.8");
-      } else {
-        ico.innerHTML = '<rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>';
-        ico.setAttribute("stroke-width","1.4");
-      }
-      ico.style.stroke = p==="idle" ? "rgba(255,255,255,.6)" : "rgba(255,255,255,.82)";
-    }
+    const [bg, shadow, transform] = styles[p] || styles.idle;
+    inner.style.background  = bg;
+    inner.style.boxShadow   = shadow;
+    inner.style.transform   = transform;
+    inner.style.transition  = "all .5s ease";
   }, []);
 
   const updatePhase = useCallback((p) => {
-    setPhase(p); applyOrbPhase(p);
-    if (p!=="idle") setHintSeen(true);
+    setPhase(p);
+    applyOrbPhase(p);
+    if (p !== "idle") setHintSeen(true);
   }, [applyOrbPhase]);
 
   const drawVisualiser = useCallback(() => {
@@ -271,129 +312,234 @@ function GuruMode({ user, onClose }) {
     };
     draw();
   }, []);
-  const stopVisualiser = useCallback(() => { if(animFrameRef.current) cancelAnimationFrame(animFrameRef.current); },[]);
+  const stopVisualiser = useCallback(() => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+  }, []);
 
+  // FIX 1 + 2 + 3: Proper voice loading, sentence-boundary truncation, error logging
   const speakText = useCallback(async (text) => {
     updatePhase("speaking");
-    const clean = text.replace(/\*\*(.*?)\*\*/g,"$1").replace(/\*(.*?)\*/g,"$1")
-      .replace(/`(.*?)`/g,"$1").replace(/#{1,6}\s/g,"").replace(/\n+/g,". ").slice(0,500);
+    const base = text
+      .replace(/\*\*(.*?)\*\*/g,"$1")
+      .replace(/\*(.*?)\*/g,"$1")
+      .replace(/`(.*?)`/g,"$1")
+      .replace(/#{1,6}\s/g,"")
+      .replace(/\n+/g,". ");
+
+    // FIX 3: Cut at sentence boundary instead of hard char limit
+    const MAX = 500;
+    const clean = base.length > MAX
+      ? (base.lastIndexOf('.', MAX) > 50 ? base.slice(0, base.lastIndexOf('.', MAX) + 1) : base.slice(0, MAX))
+      : base;
+
     if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
       try {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`,{
-          method:"POST",
-          headers:{"xi-api-key":ELEVEN_API_KEY,"Content-Type":"application/json"},
-          body:JSON.stringify({text:clean,model_id:"eleven_turbo_v2",voice_settings:{stability:.5,similarity_boost:.85,style:.35,use_speaker_boost:true}}),
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`, {
+          method: "POST",
+          headers: { "xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: clean,
+            model_id: "eleven_turbo_v2",
+            voice_settings: { stability:.5, similarity_boost:.85, style:.35, use_speaker_boost:true }
+          }),
         });
-        if (!res.ok) throw new Error();
+        if (!res.ok) throw new Error(`ElevenLabs error ${res.status}`);
         const blob = await res.blob(), url = URL.createObjectURL(blob);
         audioRef.current?.pause();
         audioRef.current = new Audio(url);
-        audioRef.current.onended = ()=>{updatePhase("idle");URL.revokeObjectURL(url);};
-        audioRef.current.onerror = ()=>updatePhase("idle");
-        await audioRef.current.play(); return;
-      } catch (_) {}
+        audioRef.current.onended = () => { updatePhase("idle"); URL.revokeObjectURL(url); };
+        audioRef.current.onerror = () => updatePhase("idle");
+        await audioRef.current.play();
+        return;
+      } catch (e) {
+        // FIX 2: Log the error instead of silently swallowing it
+        console.warn("ElevenLabs TTS failed, falling back to browser speech:", e);
+      }
     }
+
+    // FIX 1: Wait for voices to actually load before selecting
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(clean); utt.rate=0.93;
-    const voices = window.speechSynthesis.getVoices();
-    const v = voices.find(v=>v.lang.startsWith("en")&&(v.name.includes("Google")||v.name.includes("Natural")||v.name.includes("Samantha")))||voices.find(v=>v.lang.startsWith("en"));
-    if (v) utt.voice=v;
-    utt.onend=utt.onerror=()=>updatePhase("idle");
+    const utt = new SpeechSynthesisUtterance(clean);
+    utt.rate = 0.93;
+    const voices = await getVoiceList();
+    const v = voices.find(v => v.lang.startsWith("en") && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha")))
+           || voices.find(v => v.lang.startsWith("en"));
+    if (v) utt.voice = v;
+    utt.onend = utt.onerror = () => updatePhase("idle");
     window.speechSynthesis.speak(utt);
   }, [updatePhase]);
 
   const sendToAI = useCallback(async (transcript) => {
     if (!transcript.trim()) { updatePhase("idle"); return; }
     setCaption(transcript); setResponse(""); updatePhase("thinking");
-    const newHistory = [...history,{role:"user",content:transcript}];
+    const newHistory = [...history, { role:"user", content:transcript }];
     setHistory(newHistory);
     try {
-      let answer="";
+      let answer = "";
       if (GROQ_KEY) {
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions",{
-          method:"POST",
-          headers:{"Content-Type":"application/json","Authorization":`Bearer ${GROQ_KEY}`},
-          body:JSON.stringify({model:"llama-3.3-70b-versatile",messages:[{role:"system",content:GURU_PROMPT},...newHistory.slice(-10)],temperature:.8,max_tokens:180}),
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type":"application/json", "Authorization":`Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role:"system", content:GURU_PROMPT }, ...newHistory.slice(-10)],
+            temperature: .8,
+            max_tokens: 180,
+          }),
         });
         const data = await res.json();
-        answer = data.choices?.[0]?.message?.content?.trim()||"Please say that again?";
+        answer = data.choices?.[0]?.message?.content?.trim() || "Please say that again?";
       } else {
-        const {data} = await axios.post(`${API}/ask-general`,{question:transcript,user_id:user?.uid||"default"});
+        const { data } = await axios.post(`${API}/ask-general`, {
+          question: transcript,
+          user_id: user?.uid || "default",
+        });
         answer = data.answer;
       }
       setResponse(answer);
-      setHistory(h=>[...h,{role:"assistant",content:answer}]);
+      setHistory(h => [...h, { role:"assistant", content:answer }]);
       await speakText(answer);
-    } catch { setError("Connection issue. Please try again."); updatePhase("idle"); }
-  }, [history,speakText,updatePhase,user]);
+    } catch (e) {
+      console.error("GuruMode AI error:", e);
+      setError("Connection issue. Please try again.");
+      updatePhase("idle");
+    }
+  }, [history, speakText, updatePhase, user]);
 
   const startListening = useCallback(async () => {
-    if (phase==="speaking") { audioRef.current?.pause(); window.speechSynthesis.cancel(); updatePhase("idle"); return; }
-    if (phase!=="idle") return;
+    if (phase === "speaking") {
+      audioRef.current?.pause();
+      window.speechSynthesis.cancel();
+      updatePhase("idle");
+      return;
+    }
+    if (phase !== "idle") return;
     setError(""); setCaption(""); setResponse("");
     updatePhase("listening");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      streamRef.current=stream;
-      const audioCtx = new(window.AudioContext||window.webkitAudioContext)();
-      ctxRef.current=audioCtx;
-      const src=audioCtx.createMediaStreamSource(stream);
-      const analyser=audioCtx.createAnalyser(); analyser.fftSize=256;
-      src.connect(analyser); analyserRef.current=analyser;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // FIX 4: Resume AudioContext after user gesture to satisfy Chrome autoplay policy
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+      ctxRef.current = audioCtx;
+
+      const src = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      analyserRef.current = analyser;
       drawVisualiser();
-      const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"audio/webm";
-      const mr=new MediaRecorder(stream,{mimeType:mime}); recRef.current=mr;
-      const chunks=[];
-      mr.ondataavailable=e=>e.data?.size>0&&chunks.push(e.data);
-      mr.onstop=async()=>{
-        stopVisualiser(); stream.getTracks().forEach(t=>t.stop()); ctxRef.current?.close();
+
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+
+      // FIX 5: Wrap MediaRecorder creation in try/catch — some browsers reject both MIMEs
+      let mr;
+      try {
+        mr = new MediaRecorder(stream, { mimeType: mime });
+      } catch {
+        console.warn("Specified MIME not supported, using browser default");
+        mr = new MediaRecorder(stream);
+      }
+      recRef.current = mr;
+
+      const chunks = [];
+      mr.ondataavailable = e => e.data?.size > 0 && chunks.push(e.data);
+      mr.onstop = async () => {
+        stopVisualiser();
+        stream.getTracks().forEach(t => t.stop());
+        ctxRef.current?.close();
         updatePhase("thinking");
-        const blob=new Blob(chunks,{type:mime});
-        const form=new FormData(); form.append("file",blob,"guru_input.webm");
+        const blob = new Blob(chunks, { type: mime });
+        const form = new FormData();
+        form.append("file", blob, "guru_input.webm");
         try {
-          const {data}=await axios.post(`${API}/transcribe`,form,{headers:{"x-user-id":user?.uid||"default"}});
-          await sendToAI(data.text||data.transcription||"");
-        } catch { setError("Transcription failed. Try again."); updatePhase("idle"); }
+          const { data } = await axios.post(`${API}/transcribe`, form, {
+            headers: { "x-user-id": user?.uid || "default" }
+          });
+          await sendToAI(data.text || data.transcription || "");
+        } catch (e) {
+          console.error("Transcription failed:", e);
+          setError("Transcription failed. Try again.");
+          updatePhase("idle");
+        }
       };
       mr.start(200);
+
       // Silence detection
-      const sa=audioCtx.createAnalyser(); sa.fftSize=512; src.connect(sa);
-      const sd=new Uint8Array(sa.frequencyBinCount); let silenceStart=null;
-      const check=()=>{
-        if(!recRef.current||recRef.current.state==="inactive") return;
+      const sa = audioCtx.createAnalyser();
+      sa.fftSize = 512;
+      src.connect(sa);
+      const sd = new Uint8Array(sa.frequencyBinCount);
+      let silenceStart = null;
+      const check = () => {
+        if (!recRef.current || recRef.current.state === "inactive") return;
         sa.getByteFrequencyData(sd);
-        const avg=sd.reduce((a,b)=>a+b,0)/sd.length;
-        if(avg<8){if(!silenceStart)silenceStart=Date.now();else if(Date.now()-silenceStart>2000){mr.stop();return;}}
-        else silenceStart=null;
-        silenceTimer.current=setTimeout(check,100);
+        const avg = sd.reduce((a, b) => a + b, 0) / sd.length;
+        if (avg < 8) {
+          if (!silenceStart) silenceStart = Date.now();
+          else if (Date.now() - silenceStart > 2000) { mr.stop(); return; }
+        } else {
+          silenceStart = null;
+        }
+        silenceTimer.current = setTimeout(check, 100);
       };
-      setTimeout(check,800);
-    } catch(e) { setError(e.name==="NotAllowedError"?"Microphone access denied.":e.message); updatePhase("idle"); }
-  }, [phase,drawVisualiser,stopVisualiser,sendToAI,updatePhase,user]);
+      setTimeout(check, 800);
+    } catch (e) {
+      console.error("Mic error:", e);
+      setError(e.name === "NotAllowedError" ? "Microphone access denied." : e.message);
+      updatePhase("idle");
+    }
+  }, [phase, drawVisualiser, stopVisualiser, sendToAI, updatePhase, user]);
 
-  // Wake word inside Guru Mode
+  // FIX 7: Use a stable ref for startListening so the wake-word effect
+  // doesn't restart SpeechRecognition on every render
+  const startListeningRef = useRef(startListening);
+  useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
+
   useEffect(() => {
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return;
-    const rec=new SR(); rec.continuous=true; rec.lang="en-IN"; rec.interimResults=true;
-    wakeOnRef.current=true;
-    rec.onresult=e=>{
-      const t=Array.from(e.results).map(r=>r[0].transcript).join("").toLowerCase();
-      if((t.includes("hey guru")||t.includes("hae guru"))&&phase==="idle") startListening();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.lang = "en-IN";
+    rec.interimResults = true;
+    wakeOnRef.current = true;
+    rec.onresult = e => {
+      const t = Array.from(e.results).map(r => r[0].transcript).join("").toLowerCase();
+      if ((t.includes("hey guru") || t.includes("hae guru")) && phase === "idle") {
+        startListeningRef.current();
+      }
     };
-    rec.onerror=()=>{};
-    rec.onend=()=>{if(wakeOnRef.current)setTimeout(()=>{try{rec.start()}catch(_){}},400);};
-    try{rec.start()}catch(_){}
-    return ()=>{wakeOnRef.current=false;try{rec.stop()}catch(_){}};
-  },[phase,startListening]);
+    rec.onerror = () => {};
+    rec.onend = () => {
+      if (wakeOnRef.current) setTimeout(() => { try { rec.start(); } catch(_) {} }, 400);
+    };
+    try { rec.start(); } catch(_) {}
+    return () => {
+      wakeOnRef.current = false;
+      try { rec.stop(); } catch(_) {}
+    };
+  // FIX 7: Only depend on `phase` — not on startListening (which changes every render)
+  }, [phase]);
 
-  useEffect(()=>()=>{
-    wakeOnRef.current=false;
-    window.speechSynthesis?.cancel(); audioRef.current?.pause();
-    stopVisualiser(); clearTimeout(silenceTimer.current);
-    streamRef.current?.getTracks().forEach(t=>t.stop()); ctxRef.current?.close();
-  },[stopVisualiser]);
+  useEffect(() => () => {
+    wakeOnRef.current = false;
+    window.speechSynthesis?.cancel();
+    audioRef.current?.pause();
+    stopVisualiser();
+    clearTimeout(silenceTimer.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    ctxRef.current?.close();
+  }, [stopVisualiser]);
 
-  const phaseLabel = {idle:"",listening:"Listening",thinking:"Processing",speaking:"Speaking"}[phase];
+  const phaseLabel = { idle:"", listening:"Listening", thinking:"Processing", speaking:"Speaking" }[phase];
+
+  // FIX 6: Orb icon rendered declaratively via JSX state — no more innerHTML mutations
+  const showWaveform = phase === "listening" || phase === "speaking";
 
   return (
     <div className="guru-overlay">
@@ -406,20 +552,15 @@ function GuruMode({ user, onClose }) {
         <div className="g-glow-ring"/>
         <div className="gorb" onClick={startListening}>
           <div className="gorb-inner" ref={orbInnerRef}>
-            <svg ref={orbIconRef} width="36" height="36" viewBox="0 0 24 24" fill="none"
-              stroke="rgba(255,255,255,.6)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="9" y="2" width="6" height="11" rx="3"/>
-              <path d="M5 10a7 7 0 0 0 14 0"/>
-              <line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>
-            </svg>
+            {showWaveform ? <WaveformSVG /> : <OrbMicSVG />}
           </div>
         </div>
       </div>
 
       <canvas ref={canvasRef} className="gcanvas" width={220} height={36}
-        style={{opacity:phase==="listening"?1:0}}/>
+        style={{ opacity: phase === "listening" ? 1 : 0 }}/>
 
-      {phase!=="idle" && <div className="g-status show">{phaseLabel}</div>}
+      {phase !== "idle" && <div className="g-status show">{phaseLabel}</div>}
 
       {!hintSeen && <div className="g-hint">Say <em>hey guru</em> — or tap the orb</div>}
 
@@ -432,7 +573,9 @@ function GuruMode({ user, onClose }) {
       )}
 
       {error && <p className="g-error">{error}</p>}
-      <div className="g-foot">{phase==="speaking"?"Tap to interrupt":"Tap the orb to speak · Pauses automatically"}</div>
+      <div className="g-foot">
+        {phase === "speaking" ? "Tap to interrupt" : "Tap the orb to speak · Pauses automatically"}
+      </div>
     </div>
   );
 }
@@ -471,208 +614,352 @@ export default function App() {
 
   // Auth
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => { setUser(u??null); if(u) setConversations(loadConversations(u.uid)); });
+    const unsub = onAuthStateChanged(auth, u => {
+      setUser(u ?? null);
+      if (u) setConversations(loadConversations(u.uid));
+    });
     return unsub;
   }, []);
 
   // Global wake word
   useEffect(() => {
-    if (!user||guruOpen) return;
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return;
-    const rec=new SR(); rec.continuous=true; rec.lang="en-IN"; rec.interimResults=true;
-    wakeOnRef.current=true;
-    rec.onresult=e=>{
-      const t=Array.from(e.results).map(r=>r[0].transcript).join("").toLowerCase();
-      if(t.includes("hey guru")||t.includes("hae guru")){rec.stop();setGuruOpen(true);}
+    if (!user || guruOpen) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.lang = "en-IN";
+    rec.interimResults = true;
+    wakeOnRef.current = true;
+    rec.onresult = e => {
+      const t = Array.from(e.results).map(r => r[0].transcript).join("").toLowerCase();
+      if (t.includes("hey guru") || t.includes("hae guru")) {
+        rec.stop();
+        setGuruOpen(true);
+      }
     };
-    rec.onerror=()=>{};
-    rec.onend=()=>{if(wakeOnRef.current)setTimeout(()=>{try{rec.start()}catch(_){}},400);};
-    try{rec.start()}catch(_){}
-    return ()=>{wakeOnRef.current=false;try{rec.stop()}catch(_){}};
-  },[user,guruOpen]);
+    rec.onerror = () => {};
+    rec.onend = () => {
+      if (wakeOnRef.current) setTimeout(() => { try { rec.start(); } catch(_) {} }, 400);
+    };
+    try { rec.start(); } catch(_) {}
+    return () => {
+      wakeOnRef.current = false;
+      try { rec.stop(); } catch(_) {}
+    };
+  }, [user, guruOpen]);
 
-  const readyDocs   = docs.filter(d=>d.status==="ready");
-  const authHeaders = useCallback(()=>({"x-user-id":user?.uid||"default"}),[user]);
+  const readyDocs   = docs.filter(d => d.status === "ready");
+  const authHeaders = useCallback(() => ({ "x-user-id": user?.uid || "default" }), [user]);
 
-  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
-  useEffect(()=>{const ta=taRef.current;if(!ta)return;ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,140)+"px";},[input]);
-  useEffect(()=>{
-    if(!sidebarOpen) return;
-    const h=e=>{if(!e.target.closest(".sidebar"))setSidebarOpen(false);};
-    document.addEventListener("mousedown",h);
-    return ()=>document.removeEventListener("mousedown",h);
-  },[sidebarOpen]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+  }, [input]);
 
-  const notify = useCallback((msg,type="ok")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);},[]);
-  const pushMsg  = m   => setMsgs(p=>[...p,{id:uid(),...m}]);
-  const patchMsg = (id,u) => setMsgs(p=>p.map(m=>m.id===id?(typeof u==="function"?{...m,...u(m)}:{...m,...u}):m));
+  // FIX 9: Sidebar click-outside guard — check sidebarOpen before closing,
+  // and also ignore clicks on the menu button itself
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const h = e => {
+      if (!e.target.closest(".sidebar") && !e.target.closest(".menu-btn"))
+        setSidebarOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [sidebarOpen]);
 
-  const saveCurrentConversation = useCallback((messages,convId)=>{
-    if(!user||messages.length===0) return;
-    const convs=loadConversations(user.uid);
-    const idx=convs.findIndex(c=>c.id===convId);
-    const conv={id:convId,title:messages[0]?.text?.slice(0,40)||"Conversation",messages,date:dateStr(),timestamp:Date.now(),mode};
-    if(idx>=0)convs[idx]=conv;else convs.unshift(conv);
-    const trimmed=convs.slice(0,50);
-    saveConversations(user.uid,trimmed); setConversations(trimmed);
-  },[user,mode]);
+  const notify   = useCallback((msg, type="ok") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); }, []);
+  const pushMsg  = m   => setMsgs(p => [...p, { id:uid(), ...m }]);
+  const patchMsg = (id, u) => setMsgs(p => p.map(m => m.id === id ? (typeof u === "function" ? { ...m, ...u(m) } : { ...m, ...u }) : m));
 
-  const loadConversation = conv=>{setMsgs(conv.messages);setActiveConvId(conv.id);currentConvRef.current=conv.id;setMode(conv.mode||"docs");setSidebarOpen(false);};
-  const deleteConversation=(convId,e)=>{
+  const saveCurrentConversation = useCallback((messages, convId) => {
+    if (!user || messages.length === 0) return;
+    const convs = loadConversations(user.uid);
+    const idx   = convs.findIndex(c => c.id === convId);
+    const conv  = { id:convId, title:messages[0]?.text?.slice(0,40)||"Conversation", messages, date:dateStr(), timestamp:Date.now(), mode };
+    if (idx >= 0) convs[idx] = conv; else convs.unshift(conv);
+    const trimmed = convs.slice(0, 50);
+    saveConversations(user.uid, trimmed);
+    setConversations(trimmed);
+  }, [user, mode]);
+
+  const loadConversation = conv => {
+    setMsgs(conv.messages);
+    setActiveConvId(conv.id);
+    currentConvRef.current = conv.id;
+    setMode(conv.mode || "docs");
+    setSidebarOpen(false);
+  };
+  const deleteConversation = (convId, e) => {
     e.stopPropagation();
-    const convs=loadConversations(user.uid).filter(c=>c.id!==convId);
-    saveConversations(user.uid,convs);setConversations(convs);
-    if(activeConvId===convId){setMsgs([]);setActiveConvId(null);currentConvRef.current=null;}
+    const convs = loadConversations(user.uid).filter(c => c.id !== convId);
+    saveConversations(user.uid, convs);
+    setConversations(convs);
+    if (activeConvId === convId) { setMsgs([]); setActiveConvId(null); currentConvRef.current = null; }
   };
-  const startNewConversation=()=>{
-    if(msgs.length>0&&currentConvRef.current) saveCurrentConversation(msgs,currentConvRef.current);
-    setMsgs([]);setInput("");setActiveConvId(null);currentConvRef.current=null;setSidebarOpen(false);
+  const startNewConversation = () => {
+    if (msgs.length > 0 && currentConvRef.current) saveCurrentConversation(msgs, currentConvRef.current);
+    setMsgs([]); setInput(""); setActiveConvId(null); currentConvRef.current = null; setSidebarOpen(false);
   };
-  useEffect(()=>{
-    const last=msgs[msgs.length-1];
-    if(last?.role==="ai"&&!last?.streaming&&currentConvRef.current&&user) saveCurrentConversation(msgs,currentConvRef.current);
-  },[msgs,user,saveCurrentConversation]);
+  useEffect(() => {
+    const last = msgs[msgs.length - 1];
+    if (last?.role === "ai" && !last?.streaming && currentConvRef.current && user)
+      saveCurrentConversation(msgs, currentConvRef.current);
+  }, [msgs, user, saveCurrentConversation]);
 
-  // TTS
-  const stopSpeaking=useCallback(()=>{window.speechSynthesis?.cancel();setSpeaking(null);},[]);
-  const speakMsg=useCallback(async(id,text)=>{
-    if(speaking===id){stopSpeaking();return;}
+  // FIX 1 + 2: TTS with proper voice loading and error handling
+  const stopSpeaking = useCallback(() => { window.speechSynthesis?.cancel(); setSpeaking(null); }, []);
+  const speakMsg = useCallback(async (id, text) => {
+    if (speaking === id) { stopSpeaking(); return; }
     window.speechSynthesis?.cancel();
-    const clean=text.replace(/\*\*(.*?)\*\*/g,"$1").replace(/\*(.*?)\*/g,"$1").replace(/`(.*?)`/g,"$1").replace(/#{1,6}\s/g,"").replace(/\n+/g,". ");
-    if(ELEVEN_API_KEY&&ELEVEN_VOICE_ID){
+    const clean = text
+      .replace(/\*\*(.*?)\*\*/g,"$1")
+      .replace(/\*(.*?)\*/g,"$1")
+      .replace(/`(.*?)`/g,"$1")
+      .replace(/#{1,6}\s/g,"")
+      .replace(/\n+/g,". ");
+
+    if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
       setSpeaking(id);
-      try{
-        const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`,{method:"POST",headers:{"xi-api-key":ELEVEN_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({text:clean,model_id:"eleven_turbo_v2",voice_settings:{stability:.5,similarity_boost:.85,style:.3,use_speaker_boost:true}})});
-        if(!res.ok)throw new Error();
-        const blob=await res.blob(),url=URL.createObjectURL(blob);
-        const audio=new Audio(url);
-        audio.onended=()=>{setSpeaking(null);URL.revokeObjectURL(url);};
-        audio.onerror=()=>setSpeaking(null);
-        await audio.play();return;
-      }catch(_){}
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}/stream`, {
+          method: "POST",
+          headers: { "xi-api-key":ELEVEN_API_KEY, "Content-Type":"application/json" },
+          body: JSON.stringify({ text:clean, model_id:"eleven_turbo_v2", voice_settings:{ stability:.5, similarity_boost:.85, style:.3, use_speaker_boost:true } }),
+        });
+        if (!res.ok) throw new Error(`ElevenLabs error ${res.status}`);
+        const blob = await res.blob(), url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { setSpeaking(null); URL.revokeObjectURL(url); };
+        audio.onerror = () => setSpeaking(null);
+        await audio.play();
+        return;
+      } catch (e) {
+        // FIX 2: Log instead of silently swallowing
+        console.warn("ElevenLabs TTS failed, falling back:", e);
+        setSpeaking(null);
+      }
     }
-    const utt=new SpeechSynthesisUtterance(clean);utt.rate=0.95;
-    const voices=window.speechSynthesis.getVoices();
-    const v=voices.find(v=>v.lang.startsWith("en")&&(v.name.includes("Google")||v.name.includes("Natural")||v.name.includes("Samantha")))||voices.find(v=>v.lang.startsWith("en"));
-    if(v)utt.voice=v;
-    utt.onstart=()=>setSpeaking(id);utt.onend=utt.onerror=()=>setSpeaking(null);
+
+    // FIX 1: Wait for voices before selecting
+    const utt = new SpeechSynthesisUtterance(clean);
+    utt.rate = 0.95;
+    const voices = await getVoiceList();
+    const v = voices.find(v => v.lang.startsWith("en") && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha")))
+           || voices.find(v => v.lang.startsWith("en"));
+    if (v) utt.voice = v;
+    utt.onstart = () => setSpeaking(id);
+    utt.onend = utt.onerror = () => setSpeaking(null);
     window.speechSynthesis.speak(utt);
-  },[speaking,stopSpeaking]);
-  useEffect(()=>{
-    const last=msgs[msgs.length-1];
-    if(autoSpeak&&last?.role==="ai"&&!last?.streaming&&last?.text&&!last?.error) speakMsg(last.id,last.text);
-  },[msgs,autoSpeak,speakMsg]);
+  }, [speaking, stopSpeaking]);
+
+  // FIX 8: Use a ref for speakMsg to break stale closure in the autoSpeak effect
+  const speakMsgRef = useRef(speakMsg);
+  useEffect(() => { speakMsgRef.current = speakMsg; }, [speakMsg]);
+
+  useEffect(() => {
+    const last = msgs[msgs.length - 1];
+    if (autoSpeak && last?.role === "ai" && !last?.streaming && last?.text && !last?.error)
+      speakMsgRef.current(last.id, last.text);
+  // FIX 8: speakMsg removed from deps — using ref instead
+  }, [msgs, autoSpeak]);
 
   // File upload
-  const handleFiles=useCallback(async(files)=>{
-    for(const file of Array.from(files)){
-      const id=uid();
-      setDocs(p=>[...p,{id,name:file.name,size:fileSz(file.size),status:"uploading",progress:0}]);
-      try{
-        const form=new FormData();form.append("file",file);
-        const{data}=await axios.post(`${API}/upload`,form,{headers:authHeaders(),onUploadProgress:e=>{if(e.total)setDocs(p=>p.map(d=>d.id===id?{...d,progress:Math.round(e.loaded*100/e.total)}:d));}});
-        setDocs(p=>p.map(d=>d.id===id?{...d,status:"ready",progress:100,lang:data.detected_language,chunks:data.chunks_created}:d));
+  const handleFiles = useCallback(async (files) => {
+    for (const file of Array.from(files)) {
+      const id = uid();
+      setDocs(p => [...p, { id, name:file.name, size:fileSz(file.size), status:"uploading", progress:0 }]);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const { data } = await axios.post(`${API}/upload`, form, {
+          headers: authHeaders(),
+          onUploadProgress: e => {
+            if (e.total) setDocs(p => p.map(d => d.id === id ? { ...d, progress:Math.round(e.loaded*100/e.total) } : d));
+          },
+        });
+        setDocs(p => p.map(d => d.id === id ? { ...d, status:"ready", progress:100, lang:data.detected_language, chunks:data.chunks_created } : d));
         notify(`✓ ${file.name} — ${data.chunks_created} chunks indexed`);
-      }catch(e){setDocs(p=>p.map(d=>d.id===id?{...d,status:"error"}:d));notify(e.response?.data?.detail||e.message,"err");}
+      } catch (e) {
+        setDocs(p => p.map(d => d.id === id ? { ...d, status:"error" } : d));
+        notify(e.response?.data?.detail || e.message, "err");
+      }
     }
-  },[notify,authHeaders]);
-  const onDrop=useCallback(e=>{e.preventDefault();setDrag(false);handleFiles(e.dataTransfer.files);},[handleFiles]);
-  const clearDocs=async()=>{try{await axios.delete(`${API}/documents`,{headers:authHeaders()});setDocs([]);notify("Knowledge base cleared");}catch(e){notify(e.response?.data?.detail||e.message,"err");}};
+  }, [notify, authHeaders]);
 
-  // General AI stream
-  const askGeneralAI=async(question,aiId)=>{
-    const userId=user?.uid||"default";let got=false;
-    try{
-      const res=await fetch(`${API}/ask-general/stream`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question,user_id:userId})});
-      if(!res.ok)throw new Error();
-      const reader=res.body.getReader(),dec=new TextDecoder();
-      while(true){
-        const{done,value}=await reader.read();if(done)break;
-        for(const line of dec.decode(value,{stream:true}).split("\n")){
-          if(!line.startsWith("data: "))continue;
-          const token=line.slice(6);
-          if(token==="[DONE]"){patchMsg(aiId,{streaming:false});setLoading(false);return;}
-          if(token.startsWith("[ERROR]")){patchMsg(aiId,{streaming:false,error:true});setLoading(false);return;}
-          got=true;patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
+  const onDrop = useCallback(e => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files); }, [handleFiles]);
+  const clearDocs = async () => {
+    try {
+      await axios.delete(`${API}/documents`, { headers: authHeaders() });
+      setDocs([]);
+      notify("Knowledge base cleared");
+    } catch (e) {
+      notify(e.response?.data?.detail || e.message, "err");
+    }
+  };
+
+  // FIX 11: General AI stream now includes x-user-id header
+  const askGeneralAI = async (question, aiId) => {
+    const userId = user?.uid || "default";
+    let got = false;
+    try {
+      const res = await fetch(`${API}/ask-general/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-id": userId,          // ← FIX 11
+        },
+        body: JSON.stringify({ question, user_id: userId }),
+      });
+      if (!res.ok) throw new Error();
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value, { stream:true }).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const token = line.slice(6);
+          if (token === "[DONE]")             { patchMsg(aiId, { streaming:false }); setLoading(false); return; }
+          if (token.startsWith("[ERROR]"))    { patchMsg(aiId, { streaming:false, error:true }); setLoading(false); return; }
+          got = true;
+          patchMsg(aiId, m => ({ text: (m.text || "") + token.replace(/\\n/g, "\n") }));
         }
       }
-    }catch(_){}
-    if(!got){
-      try{const{data}=await axios.post(`${API}/ask-general`,{question,user_id:userId});patchMsg(aiId,{text:data.answer,sources:[],streaming:false});}
-      catch{patchMsg(aiId,{text:"Connection error.",error:true,streaming:false});}
+    } catch (_) {}
+    if (!got) {
+      try {
+        const { data } = await axios.post(`${API}/ask-general`, { question, user_id:userId });
+        patchMsg(aiId, { text:data.answer, sources:[], streaming:false });
+      } catch {
+        patchMsg(aiId, { text:"Connection error.", error:true, streaming:false });
+      }
     }
     setLoading(false);
   };
 
   // Send
-  const send=useCallback(async(override)=>{
-    const q=(override??input).trim();
-    if(!q||loading)return;
-    if(mode==="docs"&&!readyDocs.length){notify("Upload a document first, or switch to AI mode","err");return;}
-    if(!currentConvRef.current){const newId=uid();currentConvRef.current=newId;setActiveConvId(newId);}
-    pushMsg({role:"user",text:q,time:timeNow()});
-    setInput("");setLoading(true);
-    const aiId=uid();
-    pushMsg({id:aiId,role:"ai",text:"",time:timeNow(),sources:[],streaming:true,error:false});
-    if(mode==="ai"){await askGeneralAI(q,aiId);return;}
-    const userId=user?.uid||"default";let gotStream=false;
-    const fallback=setTimeout(async()=>{
-      if(gotStream)return;abortRef.current?.();
-      try{const{data}=await axios.post(`${API}/ask`,{question:q,user_id:userId});patchMsg(aiId,{text:data.answer,sources:data.sources??[],streaming:false});}
-      catch(e){patchMsg(aiId,{text:e.response?.data?.detail||e.message,error:true,streaming:false});}
-      finally{setLoading(false);}
-    },4000);
-    let aborted=false;abortRef.current=()=>{aborted=true;};
-    try{
-      const res=await fetch(`${API}/ask/stream`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,user_id:userId})});
-      if(!res.ok)throw new Error();
-      const reader=res.body.getReader(),dec=new TextDecoder();
-      while(!aborted){
-        const{done,value}=await reader.read();if(done)break;
-        for(const line of dec.decode(value,{stream:true}).split("\n")){
-          if(!line.startsWith("data: "))continue;
-          const token=line.slice(6);
-          if(token==="[DONE]"){clearTimeout(fallback);patchMsg(aiId,{streaming:false});setLoading(false);return;}
-          if(token.startsWith("[ERROR]")){clearTimeout(fallback);patchMsg(aiId,{streaming:false,error:true});setLoading(false);return;}
-          gotStream=true;patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
+  const send = useCallback(async (override) => {
+    const q = (override ?? input).trim();
+    if (!q || loading) return;
+    if (mode === "docs" && !readyDocs.length) { notify("Upload a document first, or switch to AI mode", "err"); return; }
+    if (!currentConvRef.current) { const newId = uid(); currentConvRef.current = newId; setActiveConvId(newId); }
+    pushMsg({ role:"user", text:q, time:timeNow() });
+    setInput(""); setLoading(true);
+    const aiId = uid();
+    pushMsg({ id:aiId, role:"ai", text:"", time:timeNow(), sources:[], streaming:true, error:false });
+    if (mode === "ai") { await askGeneralAI(q, aiId); return; }
+
+    const userId = user?.uid || "default";
+    let gotStream = false;
+
+    const fallback = setTimeout(async () => {
+      if (gotStream) return;
+      abortRef.current?.();
+      try {
+        const { data } = await axios.post(`${API}/ask`, { question:q, user_id:userId });
+        patchMsg(aiId, { text:data.answer, sources:data.sources??[], streaming:false });
+      } catch (e) {
+        patchMsg(aiId, { text:e.response?.data?.detail || e.message, error:true, streaming:false });
+      } finally {
+        setLoading(false);
+      }
+    }, 4000);
+
+    let aborted = false;
+    abortRef.current = () => { aborted = true; };
+    try {
+      const res = await fetch(`${API}/ask/stream`, {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({ question:q, user_id:userId }),
+      });
+      if (!res.ok) throw new Error();
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value, { stream:true }).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const token = line.slice(6);
+          if (token === "[DONE]")           { clearTimeout(fallback); patchMsg(aiId, { streaming:false }); setLoading(false); return; }
+          if (token.startsWith("[ERROR]"))  { clearTimeout(fallback); patchMsg(aiId, { streaming:false, error:true }); setLoading(false); return; }
+          // FIX 10: Clear the fallback timer as soon as first real token arrives
+          if (!gotStream) clearTimeout(fallback);
+          gotStream = true;
+          patchMsg(aiId, m => ({ text: (m.text || "") + token.replace(/\\n/g, "\n") }));
         }
       }
-    }catch(_){}
-  },[input,loading,readyDocs,notify,user,mode]);
+    } catch (_) {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, loading, readyDocs, notify, user, mode]);
 
   // Mic
-  const startMic=useCallback(async()=>{
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"audio/webm";
-      const mr=new MediaRecorder(stream,{mimeType:mime});recRef.current=mr;const chunks=[];
-      mr.ondataavailable=e=>e.data?.size>0&&chunks.push(e.data);
-      mr.onstop=async()=>{
-        stream.getTracks().forEach(t=>t.stop());clearInterval(micTmr.current);setMicSec(0);setMicOn(false);
-        const blob=new Blob(chunks,{type:mime}),form=new FormData();form.append("file",blob,"voice.webm");
-        try{notify("Transcribing…","info");const{data}=await axios.post(`${API}/speech-query`,form,{headers:authHeaders()});pushMsg({role:"user",text:`🎤 ${data.transcribed_question}`,time:timeNow()});pushMsg({role:"ai",text:data.answer,time:timeNow(),sources:data.sources??[],streaming:false,error:false});}
-        catch(e){notify(e.response?.data?.detail||e.message,"err");}
+  const startMic = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+
+      // FIX 5: Wrap MediaRecorder creation to handle unsupported MIME
+      let mr;
+      try {
+        mr = new MediaRecorder(stream, { mimeType:mime });
+      } catch {
+        mr = new MediaRecorder(stream);
+      }
+      recRef.current = mr;
+      const chunks = [];
+      mr.ondataavailable = e => e.data?.size > 0 && chunks.push(e.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        clearInterval(micTmr.current);
+        setMicSec(0);
+        setMicOn(false);
+        const blob = new Blob(chunks, { type:mime });
+        const form = new FormData();
+        form.append("file", blob, "voice.webm");
+        try {
+          notify("Transcribing…", "info");
+          const { data } = await axios.post(`${API}/speech-query`, form, { headers:authHeaders() });
+          pushMsg({ role:"user",  text:`🎤 ${data.transcribed_question}`, time:timeNow() });
+          pushMsg({ role:"ai",    text:data.answer, time:timeNow(), sources:data.sources??[], streaming:false, error:false });
+        } catch (e) {
+          notify(e.response?.data?.detail || e.message, "err");
+        }
       };
-      mr.start(200);setMicOn(true);setMicSec(0);micTmr.current=setInterval(()=>setMicSec(s=>s+1),1000);
-    }catch(e){notify(e.name==="NotAllowedError"?"Microphone access denied":e.message,"err");}
-  },[notify,authHeaders]);
-  const stopMic=useCallback(()=>{recRef.current?.state!=="inactive"&&recRef.current?.stop();},[]);
-  const fmtMic=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-  const copyMsg=(id,text)=>{navigator.clipboard.writeText(text).catch(()=>{});setCopied(id);setTimeout(()=>setCopied(null),1800);};
-  const handleSignOut=async()=>{await signOut(auth);setDocs([]);setMsgs([]);setConversations([]);};
+      mr.start(200);
+      setMicOn(true);
+      setMicSec(0);
+      micTmr.current = setInterval(() => setMicSec(s => s + 1), 1000);
+    } catch (e) {
+      notify(e.name === "NotAllowedError" ? "Microphone access denied" : e.message, "err");
+    }
+  }, [notify, authHeaders]);
 
-  if (user===undefined) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100dvh",background:"var(--bg)",color:"var(--g2)",fontSize:".82rem",letterSpacing:".15em",fontFamily:"var(--cap)"}}>Awakening Gyana AI…</div>;
-  if (user===null) return <LoginPage/>;
+  const stopMic  = useCallback(() => { recRef.current?.state !== "inactive" && recRef.current?.stop(); }, []);
+  const fmtMic   = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  const copyMsg  = (id, text) => { navigator.clipboard.writeText(text).catch(()=>{}); setCopied(id); setTimeout(() => setCopied(null), 1800); };
+  const handleSignOut = async () => { await signOut(auth); setDocs([]); setMsgs([]); setConversations([]); };
 
-  const suggestions = mode==="ai" ? AI_SUGGESTIONS : DOC_SUGGESTIONS;
-  const placeholder = micOn?"Recording…":mode==="ai"?"Ask your guru anything…":readyDocs.length===0?"Upload a document to begin…":"Ask anything about your documents…";
+  if (user === undefined) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100dvh", background:"var(--bg)", color:"var(--g2)", fontSize:".82rem", letterSpacing:".15em", fontFamily:"var(--cap)" }}>
+      Awakening Gyana AI…
+    </div>
+  );
+  if (user === null) return <LoginPage/>;
+
+  const suggestions = mode === "ai" ? AI_SUGGESTIONS : DOC_SUGGESTIONS;
+  const placeholder = micOn ? "Recording…" : mode === "ai" ? "Ask your guru anything…" : readyDocs.length === 0 ? "Upload a document to begin…" : "Ask anything about your documents…";
 
   return (
     <>
-      {guruOpen && <GuruMode user={user} onClose={()=>setGuruOpen(false)}/>}
+      {guruOpen && <GuruMode user={user} onClose={() => setGuruOpen(false)}/>}
 
       <div className="shell">
-        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>
+        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={() => setSidebarOpen(false)}/>
 
         {/* ── Sidebar ── */}
         <aside className={`sidebar${sidebarOpen?" open":""}`}>
@@ -684,12 +971,12 @@ export default function App() {
               <div className="sb-name">Gyana AI</div>
               <div className="sb-tagline">Knowledge · Wisdom</div>
             </div>
-            <button className="sb-close-btn" onClick={()=>setSidebarOpen(false)}><CloseSVG/></button>
+            <button className="sb-close-btn" onClick={() => setSidebarOpen(false)}><CloseSVG/></button>
           </div>
 
           <div className="user-row">
-            {user.photoURL&&<img src={user.photoURL} alt="" width={22} height={22} style={{borderRadius:"50%",flexShrink:0}}/>}
-            <span className="uname">{user.displayName||user.email}</span>
+            {user.photoURL && <img src={user.photoURL} alt="" width={22} height={22} style={{ borderRadius:"50%", flexShrink:0 }}/>}
+            <span className="uname">{user.displayName || user.email}</span>
             <button className="out-btn" onClick={handleSignOut} title="Sign out">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
@@ -700,54 +987,55 @@ export default function App() {
           <button className="new-btn" onClick={startNewConversation}><PlusSVG/> New conversation</button>
 
           <div className="sb-tabs">
-            {["docs","history"].map(tab=>(
-              <button key={tab} className={`sb-tab${sidebarTab===tab?" on":""}`} onClick={()=>setSidebarTab(tab)}>
-                {tab==="docs"?"Documents":"History"}
+            {["docs","history"].map(tab => (
+              <button key={tab} className={`sb-tab${sidebarTab===tab?" on":""}`} onClick={() => setSidebarTab(tab)}>
+                {tab === "docs" ? "Documents" : "History"}
               </button>
             ))}
           </div>
 
-          {sidebarTab==="docs"&&(<>
+          {sidebarTab === "docs" && (<>
             <p className="sb-label">Knowledge Base</p>
             <div className={`dz${drag?" dz-over":""}`} role="button" tabIndex={0}
-              onClick={()=>fileRef.current?.click()}
-              onDragOver={e=>{e.preventDefault();setDrag(true);}}
-              onDragLeave={()=>setDrag(false)} onDrop={onDrop}
-              onKeyDown={e=>e.key==="Enter"&&fileRef.current?.click()}>
+              onClick={() => fileRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setDrag(true); }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={onDrop}
+              onKeyDown={e => e.key === "Enter" && fileRef.current?.click()}>
               <div className="dz-ring"><UploadSVG/></div>
               <span className="dz-t">Drop files or click to upload</span>
               <span className="dz-s">PDF · DOCX · PPTX · TXT · Images · Audio</span>
             </div>
-            <input ref={fileRef} type="file" hidden multiple accept={ACCEPT} onChange={e=>handleFiles(e.target.files)}/>
+            <input ref={fileRef} type="file" hidden multiple accept={ACCEPT} onChange={e => handleFiles(e.target.files)}/>
             <div className="doc-list">
-              {docs.map((d,i)=>(
-                <div key={d.id} className={`doc-row${d.status==="error"?" doc-err":""}`} style={{animationDelay:`${i*.05}s`}}>
+              {docs.map((d, i) => (
+                <div key={d.id} className={`doc-row${d.status==="error"?" doc-err":""}`} style={{ animationDelay:`${i*.05}s` }}>
                   <div className="doc-ico">{fileIcon(d.name)}</div>
                   <div className="doc-info">
                     <div className="doc-name" title={d.name}>{d.name}</div>
                     <div className="doc-meta">{d.size}{d.lang&&d.lang!=="unknown"?` · ${d.lang.toUpperCase()}`:""}{d.chunks?` · ${d.chunks} chunks`:""}</div>
-                    {d.status==="uploading"&&<div className="doc-bar"><div className="doc-fill" style={{width:`${d.progress}%`}}/></div>}
+                    {d.status === "uploading" && <div className="doc-bar"><div className="doc-fill" style={{ width:`${d.progress}%` }}/></div>}
                   </div>
                   <div className={`doc-dot ${d.status}`}/>
                 </div>
               ))}
             </div>
-            {readyDocs.length>0&&<button className="clear-btn" onClick={clearDocs}>Remove all documents</button>}
+            {readyDocs.length > 0 && <button className="clear-btn" onClick={clearDocs}>Remove all documents</button>}
           </>)}
 
-          {sidebarTab==="history"&&(<>
+          {sidebarTab === "history" && (<>
             <p className="sb-label">Chat History</p>
             <div className="conv-list">
-              {conversations.length===0
-                ?<div className="conv-empty">No conversations yet.</div>
-                :conversations.map(conv=>(
-                  <div key={conv.id} className={`conv-item${activeConvId===conv.id?" active":""}`} onClick={()=>loadConversation(conv)}>
-                    <div className="conv-ico">{conv.mode==="ai"?<ChatSVG/>:<DocSVG/>}</div>
+              {conversations.length === 0
+                ? <div className="conv-empty">No conversations yet.</div>
+                : conversations.map(conv => (
+                  <div key={conv.id} className={`conv-item${activeConvId===conv.id?" active":""}`} onClick={() => loadConversation(conv)}>
+                    <div className="conv-ico">{conv.mode === "ai" ? <ChatSVG/> : <DocSVG/>}</div>
                     <div className="conv-info">
                       <div className="conv-title">{conv.title}</div>
                       <div className="conv-meta">{conv.date} · {conv.messages.length} msgs</div>
                     </div>
-                    <button className="conv-del" onClick={e=>deleteConversation(conv.id,e)}>✕</button>
+                    <button className="conv-del" onClick={e => deleteConversation(conv.id, e)}>✕</button>
                   </div>
                 ))
               }
@@ -756,14 +1044,19 @@ export default function App() {
 
           <div className="sb-spacer"/>
           <div className="sb-foot">
-            <button className="guru-sb-btn" onClick={()=>setGuruOpen(true)}>
+            <button className="guru-sb-btn" onClick={() => setGuruOpen(true)}>
               <ChakraSVG size={13} op=".65"/> Guru Mode
             </button>
             <div className="model-pill">
               <div className="model-led"/>
-              <div><div className="model-name">LLaMA 3.3 70B</div><div className="model-sub">Groq · Supabase · ElevenLabs</div></div>
+              <div>
+                <div className="model-name">LLaMA 3.3 70B</div>
+                <div className="model-sub">Groq · Supabase · ElevenLabs</div>
+              </div>
             </div>
-            <p className="doc-count">{mode==="ai"?"General AI mode":readyDocs.length===0?"No documents indexed":`${readyDocs.length} doc${readyDocs.length>1?"s":""} in context`}</p>
+            <p className="doc-count">
+              {mode === "ai" ? "General AI mode" : readyDocs.length === 0 ? "No documents indexed" : `${readyDocs.length} doc${readyDocs.length>1?"s":""} in context`}
+            </p>
           </div>
         </aside>
 
@@ -773,55 +1066,57 @@ export default function App() {
 
           <div className="topbar">
             <div className="tb-left">
-              <button className="menu-btn" onClick={()=>setSidebarOpen(true)}><MenuSVG/></button>
-              <span className="tb-title">{mode==="ai"?"AI Assistant":"Query Interface"}</span>
-              {mode==="docs"&&readyDocs.length>0&&(
+              <button className="menu-btn" onClick={() => setSidebarOpen(true)}><MenuSVG/></button>
+              <span className="tb-title">{mode === "ai" ? "AI Assistant" : "Query Interface"}</span>
+              {mode === "docs" && readyDocs.length > 0 && (
                 <div className="ctx-pill">
                   <span className="ctx-led"/>
-                  <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
+                  <span className="ctx-txt">
+                    {readyDocs.slice(0,2).map(d => d.name).join(" · ")}{readyDocs.length > 2 ? ` +${readyDocs.length-2} more` : ""}
+                  </span>
                 </div>
               )}
             </div>
             <div className="tb-right">
-              <button className="guru-tb-btn" onClick={()=>setGuruOpen(true)}>
+              <button className="guru-tb-btn" onClick={() => setGuruOpen(true)}>
                 <ChakraSVG size={11} op=".65"/> Guru Mode
               </button>
-              <button className="top-btn" onClick={()=>{if(autoSpeak)stopSpeaking();setAutoSpeak(p=>!p);}}
-                style={autoSpeak?{borderColor:"rgba(184,146,46,.3)",color:"var(--g2)",background:"rgba(184,146,46,.08)"}:{}}>
-                {autoSpeak?"🔊":"🔇"}
+              <button className="top-btn" onClick={() => { if (autoSpeak) stopSpeaking(); setAutoSpeak(p => !p); }}
+                style={autoSpeak ? { borderColor:"rgba(184,146,46,.3)", color:"var(--g2)", background:"rgba(184,146,46,.08)" } : {}}>
+                {autoSpeak ? "🔊" : "🔇"}
               </button>
               <div className="mode-toggle">
-                <button className={`mode-btn${mode==="docs"?" active":""}`} onClick={()=>setMode("docs")}><DocSVG/> Doc</button>
-                <button className={`mode-btn${mode==="ai"?" active":""}`}   onClick={()=>setMode("ai")}><ChatSVG/> AI</button>
+                <button className={`mode-btn${mode==="docs"?" active":""}`} onClick={() => setMode("docs")}><DocSVG/> Doc</button>
+                <button className={`mode-btn${mode==="ai"?" active":""}`}   onClick={() => setMode("ai")}><ChatSVG/> AI</button>
               </div>
-              {msgs.length>0&&<button className="top-btn" onClick={startNewConversation}>Clear</button>}
+              {msgs.length > 0 && <button className="top-btn" onClick={startNewConversation}>Clear</button>}
             </div>
           </div>
 
           <div className="feed">
-            {msgs.length===0?(
+            {msgs.length === 0 ? (
               <div className="welcome">
                 <div className="orb-wrap">
                   <YantraSmall/>
                   <div className="ring1"/><div className="ring2"/>
-                  <div className="orb" onClick={()=>setGuruOpen(true)}>
+                  <div className="orb" onClick={() => setGuruOpen(true)}>
                     <ChakraSVG size={36} op=".78"/>
                   </div>
                 </div>
                 <h1 className="wh">Hey <em>Guru</em></h1>
                 <div className="wsub">Gyana AI · Knowledge System</div>
                 <p className="wp">
-                  {mode==="ai"
-                    ?"Your personal guru — friend, advisor, teacher, and companion."
-                    :<>Upload documents and ask anything.<br/>Or say <span>"Hey Guru"</span> to activate live voice.</>}
+                  {mode === "ai"
+                    ? "Your personal guru — friend, advisor, teacher, and companion."
+                    : <> Upload documents and ask anything.<br/>Or say <span>"Hey Guru"</span> to activate live voice. </>}
                 </p>
-                <button className="guru-cta" onClick={()=>setGuruOpen(true)}>
+                <button className="guru-cta" onClick={() => setGuruOpen(true)}>
                   <ChakraSVG size={12} op=".65"/> Enter Guru Mode
                 </button>
-                {(mode==="ai"||readyDocs.length>0)&&(
+                {(mode === "ai" || readyDocs.length > 0) && (
                   <div className="sug-grid">
-                    {suggestions.map(s=>(
-                      <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
+                    {suggestions.map(s => (
+                      <button key={s.title} className="sug-card" onClick={() => send(s.title)} disabled={loading}>
                         <span className="sug-t">{s.title}</span>
                         <span className="sug-d">{s.desc}</span>
                       </button>
@@ -829,39 +1124,39 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ):(
+            ) : (
               <div className="msgs">
-                {msgs.map(msg=>msg.role==="user"?(
+                {msgs.map(msg => msg.role === "user" ? (
                   <div key={msg.id} className="turn">
                     <div className="h-row">
                       <div className="h-time">{msg.time}</div>
                       <div className="h-bub">{msg.text}</div>
                     </div>
                   </div>
-                ):(
+                ) : (
                   <div key={msg.id} className="turn">
                     <div className="a-row">
                       <div className="a-av"><ChakraSVG size={13} op=".9"/></div>
                       <div className="a-body">
                         <div className="a-meta"><span className="a-name">Gyana AI</span><span className="a-time">{msg.time}</span></div>
                         <div className={`a-text${msg.error?" a-err":""}`}>
-                          {msg.text?<MD text={msg.text}/>:msg.streaming?<div className="typing"><span/><span/><span/></div>:null}
-                          {msg.streaming&&msg.text&&<span className="cur"/>}
+                          {msg.text ? <MD text={msg.text}/> : msg.streaming ? <div className="typing"><span/><span/><span/></div> : null}
+                          {msg.streaming && msg.text && <span className="cur"/>}
                         </div>
-                        {!msg.streaming&&msg.sources?.length>0&&(
+                        {!msg.streaming && msg.sources?.length > 0 && (
                           <div className="sources">
                             <span className="src-lbl">Sources —</span>
-                            {msg.sources.map((s,i)=><span key={i} className="src-chip">{s}</span>)}
+                            {msg.sources.map((s, i) => <span key={i} className="src-chip">{s}</span>)}
                           </div>
                         )}
-                        {!msg.streaming&&!msg.error&&(
+                        {!msg.streaming && !msg.error && (
                           <div className="a-acts">
-                            <button className="act-btn" onClick={()=>copyMsg(msg.id,msg.text)}>
-                              {copied===msg.id?<><CheckSVG/> Copied</>:<><CopySVG/> Copy</>}
+                            <button className="act-btn" onClick={() => copyMsg(msg.id, msg.text)}>
+                              {copied === msg.id ? <><CheckSVG/> Copied</> : <><CopySVG/> Copy</>}
                             </button>
-                            <button className="act-btn" onClick={()=>speakMsg(msg.id,msg.text)}
-                              style={speaking===msg.id?{color:"var(--g2)",background:"rgba(184,146,46,.08)"}:{}}>
-                              {speaking===msg.id?<><StopSVG/> Stop</>:<><SpeakSVG/> Listen</>}
+                            <button className="act-btn" onClick={() => speakMsg(msg.id, msg.text)}
+                              style={speaking === msg.id ? { color:"var(--g2)", background:"rgba(184,146,46,.08)" } : {}}>
+                              {speaking === msg.id ? <><StopSVG/> Stop</> : <><SpeakSVG/> Listen</>}
                             </button>
                           </div>
                         )}
@@ -877,20 +1172,22 @@ export default function App() {
           <div className="inp-wrap">
             <div className="inp-box">
               <textarea ref={taRef} value={input} rows={1} placeholder={placeholder}
-                disabled={loading||micOn}
-                onChange={e=>setInput(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+                disabled={loading || micOn}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               />
               <div className="inp-bar">
                 <div className="inp-tools">
-                  <button className={`tool-btn${micOn?" mic-on":""}`} onClick={micOn?stopMic:startMic}>
-                    {micOn?<span className="rec-row"><span className="rec-dot"/><span className="rec-t">{fmtMic(micSec)}</span></span>:<MicSVG/>}
+                  <button className={`tool-btn${micOn?" mic-on":""}`} onClick={micOn ? stopMic : startMic}>
+                    {micOn
+                      ? <span className="rec-row"><span className="rec-dot"/><span className="rec-t">{fmtMic(micSec)}</span></span>
+                      : <MicSVG/>}
                   </button>
-                  {mode==="docs"&&<button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSVG/></button>}
-                  <button className="tool-btn" onClick={()=>setGuruOpen(true)} title="Guru Mode"><ChakraSVG size={13} op=".45"/></button>
+                  {mode === "docs" && <button className="tool-btn" onClick={() => fileRef.current?.click()}><AttachSVG/></button>}
+                  <button className="tool-btn" onClick={() => setGuruOpen(true)} title="Guru Mode"><ChakraSVG size={13} op=".45"/></button>
                 </div>
-                <button className="send-btn" onClick={()=>send()} disabled={loading||!input.trim()||micOn}>
-                  {loading?<span className="spin"/>:<SendSVG/>}
+                <button className="send-btn" onClick={() => send()} disabled={loading || !input.trim() || micOn}>
+                  {loading ? <span className="spin"/> : <SendSVG/>}
                 </button>
               </div>
             </div>
@@ -902,7 +1199,11 @@ export default function App() {
         </div>
       </div>
 
-      {toast&&<div className={`toast toast-${toast.type}`}>{toast.type==="err"?"✕":toast.type==="info"?"◎":"✓"}&nbsp;{toast.msg}</div>}
+      {toast && (
+        <div className={`toast toast-${toast.type}`}>
+          {toast.type === "err" ? "✕" : toast.type === "info" ? "◎" : "✓"}&nbsp;{toast.msg}
+        </div>
+      )}
     </>
   );
 }
