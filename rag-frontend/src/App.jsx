@@ -4,7 +4,7 @@
 //  Guru Mode: opens clean, "hey guru" / tap to begin, response card only
 // =============================================================================
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { initializeApp } from "firebase/app";
 import {
@@ -143,6 +143,7 @@ const YantraLarge = () => (
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 function MD({ text = "" }) {
+  if (!text) return null;
   const inline = (str, key) => {
     const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
     return <span key={key}>{parts.map((p, i) => {
@@ -167,6 +168,34 @@ function MD({ text = "" }) {
     out.push(<p key={i} className="md-p">{inline(line,i)}</p>); i++;
   }
   return <div className="md-root">{out}</div>;
+}
+
+// ── Error Boundary — catches crashes and shows error instead of blank screen ──
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error("App crash:", e, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+          height:"100dvh",background:"#09100d",color:"#cce0db",fontFamily:"sans-serif",padding:"24px",gap:"16px",textAlign:"center"}}>
+          <div style={{fontSize:"2rem"}}>⚠️</div>
+          <div style={{fontSize:"1rem",color:"#c05050"}}>Something went wrong</div>
+          <pre style={{fontSize:".7rem",color:"#6b9690",maxWidth:"600px",overflow:"auto",textAlign:"left",
+            background:"rgba(255,255,255,.04)",padding:"12px",borderRadius:"8px",whiteSpace:"pre-wrap"}}>
+            {this.state.error?.message}
+          </pre>
+          <button onClick={()=>window.location.reload()}
+            style={{padding:"8px 20px",background:"rgba(184,146,46,.1)",border:"1px solid rgba(184,146,46,.2)",
+            borderRadius:"20px",color:"#cda53a",cursor:"pointer",fontFamily:"sans-serif"}}>
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // ── Login Page ────────────────────────────────────────────────────────────────
@@ -599,7 +628,7 @@ function GuruMode({ user, onClose }) {
 // =============================================================================
 //  MAIN APP
 // =============================================================================
-export default function App() {
+function AppInner() {
   const [user,          setUser]          = useState(undefined);
   const [docs,          setDocs]          = useState([]);
   const [msgs,          setMsgs]          = useState([]);
@@ -654,16 +683,12 @@ export default function App() {
   const readyDocs   = docs.filter(d=>d.status==="ready");
   const authHeaders = useCallback(()=>({"x-user-id":user?.uid||"default"}),[user]);
 
-  // Scroll only when new message arrives or AI streams — never on welcome screen
+  // Scroll to bottom when messages update — never fires on empty/welcome screen
   useEffect(() => {
     if (msgs.length === 0) return;
-    const last = msgs[msgs.length - 1];
-    if (last?.streaming || msgs.length !== lastMsgCountRef.current) {
-      lastMsgCountRef.current = msgs.length;
-      requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      });
-    }
+    requestAnimationFrame(() => {
+      if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    });
   }, [msgs]);
   useEffect(()=>{const ta=taRef.current;if(!ta)return;ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,140)+"px";},[input]);
   useEffect(()=>{
@@ -1098,5 +1123,13 @@ export default function App() {
 
       {toast&&<div className={`toast toast-${toast.type}`}>{toast.type==="err"?"✕":toast.type==="info"?"◎":"✓"}&nbsp;{toast.msg}</div>}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
