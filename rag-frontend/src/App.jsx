@@ -32,22 +32,18 @@ const GROQ_KEY        = import.meta.env.VITE_GROQ_API_KEY    || "";
 const ACCEPT = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 
 // ── Guru system prompt ────────────────────────────────────────────────────────
-const GURU_PROMPT = `You are Gyana AI — a god-level intelligence built by Ayushman Pati from Cuttack, Odisha, India.
-"Gyana" means Knowledge and Wisdom in Sanskrit. You embody both.
-You are simultaneously: best friend, world-class therapist, brilliant assistant, patient guru,
-life coach, creative partner, master programmer, and ancient Indian sage.
-Be warm but sharp. Caring but honest. Adapt instantly — playful in casual chat, serious when needed.
-Short replies in casual conversation. Deeply detailed when depth is needed.
-Never say "I'm just an AI". For code: always write complete, production-quality solutions.
-If asked who built you: "Ayushman Pati, from Cuttack, Odisha, India."
+const GURU_PROMPT = `You are Gyana AI, built by Ayushman Pati from Cuttack, Odisha, India.
+You are a warm, wise, brilliant companion. Friend, therapist, teacher, and guide.
+You always respond in spoken English only.
 
-IMPORTANT FOR VOICE MODE:
-- When the user speaks in Odia, Hindi, or any Indian language, you may respond in that language.
-- However, keep responses concise and natural for speech — avoid long complex sentences.
-- Do not use special characters, bullet points, or markdown in voice responses.
-- Write numbers and abbreviations in full words (e.g. "five" not "5", "for example" not "e.g.").
-- If mixing English and Odia (code-switching), keep it natural — like how educated Odias actually speak.
-- Avoid pure script-heavy responses in voice mode — prefer Roman transliteration mixed with English when possible, as it sounds more natural with the voice model.`;
+STRICT VOICE RULES - follow every single one:
+- Maximum 2 to 3 short sentences. Never more.
+- Zero markdown. No asterisks, bullets, dashes, hashtags, or backticks.
+- No lists of any kind. Only flowing natural sentences.
+- Write numbers as words. Two not 2. Fifty percent not 50%.
+- Sound like a calm wise friend talking, not a document being read.
+- If asked who built you: I was built by Ayushman Pati, from Cuttack, Odisha.
+- Never say you are an AI. You are Gyana.`
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const FILE_ICONS = { pdf:"📄",docx:"📝",pptx:"📊",txt:"📃",png:"🖼️",jpg:"🖼️",jpeg:"🖼️",mp3:"🎵",wav:"🎵",m4a:"🎵",webm:"🎤" };
@@ -122,7 +118,7 @@ const YantraSmall = () => (
 );
 
 const YantraLarge = () => (
-  <svg className="g-yantra" width="320" height="320" viewBox="0 0 320 320" fill="none">
+  <svg className="g-yantra" width="320" height="320" viewBox="0 0 320 320" fill="none" style={{pointerEvents:"none"}}>
     <circle cx="160" cy="160" r="156" stroke="rgba(184,146,46,.05)" strokeWidth=".7" strokeDasharray="3 8"/>
     <circle cx="160" cy="160" r="126" stroke="rgba(30,138,124,.04)" strokeWidth=".6"/>
     <circle cx="160" cy="160" r="96"  stroke="rgba(184,146,46,.04)" strokeWidth=".5" strokeDasharray="2 5"/>
@@ -333,10 +329,12 @@ function GuruMode({ user, onClose }) {
     animFrameRef.current = null;
   }, []);
 
-  // ── ElevenLabs speak — always use multilingual_v2 for best quality ──────────
+  // ── ElevenLabs speak ──────────────────────────────────────────────────────
   const speakText = useCallback(async (text) => {
     updatePhase("speaking");
     const clean = cleanForSpeech(text);
+    console.log("[Gyana TTS] clean text:", clean);
+    console.log("[Gyana TTS] key present:", !!ELEVEN_API_KEY, "voice:", !!ELEVEN_VOICE_ID);
 
     if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
       try {
@@ -415,7 +413,7 @@ function GuruMode({ user, onClose }) {
               ...newHistory.slice(-12),
             ],
             temperature: 0.75,
-            max_tokens: 200,
+            max_tokens: 120,
           }),
         });
         if (!res.ok) throw new Error(`Groq ${res.status}`);
@@ -576,8 +574,8 @@ function GuruMode({ user, onClose }) {
       <div className="gorb-wrap">
         <YantraLarge />
         <div className="g-r1" /><div className="g-r2" />
-        <div className="g-glow-ring" />
-        <div className="gorb" onClick={startListening}>
+        <div className="g-glow-ring" style={{pointerEvents:"none"}} />
+        <div className="gorb" onClick={startListening} style={{zIndex:10,position:"relative"}}>
           <div className="gorb-inner" ref={orbInnerRef}>
             <svg ref={orbIconRef} width="36" height="36" viewBox="0 0 24 24" fill="none"
               stroke="rgba(255,255,255,.6)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
