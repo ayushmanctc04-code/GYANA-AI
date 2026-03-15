@@ -234,17 +234,25 @@ function LoginPage() {
 // ── Text cleaner for TTS — strips ALL markdown and punctuation clutter ────────
 function cleanForSpeech(text) {
   return text
-    .replace(/\*\*(.*?)\*\*/g, "$1")       // bold
-    .replace(/\*(.*?)\*/g, "$1")            // italic
-    .replace(/`{1,3}(.*?)`{1,3}/gs, "$1")  // code
-    .replace(/#{1,6}\s+/g, "")             // headings
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") // links
-    .replace(/\n{2,}/g, ". ")              // double newlines → pause
-    .replace(/\n/g, " ")                   // single newlines → space
-    .replace(/[_~>|]/g, "")               // other markdown chars
-    .replace(/\s{2,}/g, " ")              // multiple spaces
+    .replace(/\*\*(.*?)\*\*/g, "$1")          // **bold**
+    .replace(/\*(.*?)\*/g, "$1")               // *italic*
+    .replace(/_{2}(.*?)_{2}/g, "$1")           // __bold__
+    .replace(/_(.*?)_/g, "$1")                 // _italic_
+    .replace(/`{1,3}[^`]*`{1,3}/g, "")         // `code` — remove entirely
+    .replace(/#{1,6}\s+/g, "")                // ## headings
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")  // [link](url)
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")     // ![image](url)
+    .replace(/^[-*+]\s+/gm, "")               // bullet points
+    .replace(/^\d+\.\s+/gm, "")              // numbered lists
+    .replace(/^>+\s*/gm, "")                  // blockquotes
+    .replace(/[-]{2,}/g, " ")                  // -- or ---
+    .replace(/[|]/g, " ")                      // tables
+    .replace(/\n{2,}/g, ". ")                 // paragraph breaks
+    .replace(/\n/g, " ")                      // line breaks
+    .replace(/\s{2,}/g, " ")                  // extra spaces
+    .replace(/\.{2,}/g, ".")                  // multiple dots
     .trim()
-    .slice(0, 480);
+    .slice(0, 450);
 }
 
 // ── Guru Mode Overlay ─────────────────────────────────────────────────────────
@@ -412,7 +420,7 @@ function GuruMode({ user, onClose }) {
               { role: "system", content: GURU_PROMPT },
               ...newHistory.slice(-12),
             ],
-            temperature: 0.75,
+            temperature: 0.6,
             max_tokens: 120,
           }),
         });
