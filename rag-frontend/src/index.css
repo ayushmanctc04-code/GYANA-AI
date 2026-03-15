@@ -524,101 +524,171 @@ body::before {
    GURU MODE OVERLAY
    Opens clean. Everything appears only when needed.
 ══════════════════════════════ */
+/* ══════════════════════════════════════════
+   GURU MODE OVERLAY — full rewrite
+   Everything laid out in a single centered column.
+   No absolute positioning for content elements.
+══════════════════════════════════════════ */
 .guru-overlay {
   position: fixed; inset: 0; z-index: 200;
   background: #07100c;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
+  gap: 0;
   font-family: var(--ui); overflow: hidden;
+  padding: 60px 20px 40px;
 }
 .guru-overlay::before {
   content: ''; position: fixed; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse 60% 55% at 50% 42%, rgba(30,138,124,.055) 0%, transparent 65%);
+  background: radial-gradient(ellipse 70% 60% at 50% 40%, rgba(30,138,124,.06) 0%, transparent 65%);
 }
 
-/* Close button — discreet circle */
+/* Close — top right, always visible */
 .gcls {
-  position: absolute; top: 18px; right: 18px; z-index: 10;
-  width: 30px; height: 30px; border-radius: 50%;
-  background: transparent; border: 1px solid rgba(255,255,255,.07);
-  color: var(--ink4); cursor: pointer;
+  position: absolute; top: 16px; right: 16px; z-index: 20;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1);
+  color: var(--ink2); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all var(--e);
 }
-.gcls:hover { color: var(--ink2); border-color: rgba(255,255,255,.12); }
+.gcls:hover { color: var(--ink); border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.08); }
 
-/* "Guru Mode" label — barely there */
+/* Label top-center */
 .g-label {
-  position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
   font-family: var(--cap); font-size: .62rem; font-weight: 500;
   letter-spacing: .22em; text-transform: uppercase;
-  color: var(--g2); opacity: .28; white-space: nowrap; pointer-events: none;
+  color: var(--g2); opacity: .35; white-space: nowrap; pointer-events: none;
 }
 
-/* Orb stage */
+/* ── Orb — the centerpiece ── */
 .gorb-wrap {
   position: relative;
-  width: clamp(170px,24vw,210px); height: clamp(170px,24vw,210px);
+  width: 200px; height: 200px;
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+/* Rings */
+.g-r1 {
+  position: absolute; border-radius: 50%;
+  left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: calc(100% + 36px); height: calc(100% + 36px);
+  border: 1px solid rgba(184,146,46,.09);
+  animation: rspin 20s linear infinite; pointer-events: none;
+}
+.g-r2 {
+  position: absolute; border-radius: 50%;
+  left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: calc(100% + 72px); height: calc(100% + 72px);
+  border: 1px dashed rgba(30,138,124,.05);
+  animation: rspin 35s linear infinite reverse; pointer-events: none;
+}
+
+/* Yantra behind orb */
+.g-yantra {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%,-50%);
+  animation: rspin 80s linear infinite reverse;
+  pointer-events: none; opacity: .4;
+}
+
+/* Glow */
+.g-glow-ring {
+  position: absolute; border-radius: 50%;
+  left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: calc(100% + 60px); height: calc(100% + 60px);
+  background: radial-gradient(circle, rgba(184,146,46,.07) 0%, transparent 65%);
+  animation: gGlow 4s ease-in-out infinite; pointer-events: none;
+}
+
+/* The clickable orb */
+.gorb {
+  position: absolute; inset: 0; border-radius: 50%;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  z-index: 10; transition: transform .2s ease;
+}
+.gorb:hover { transform: scale(1.03); }
+.gorb:active { transform: scale(.96); }
+.gorb-inner {
+  width: 100%; height: 100%; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 10;
+}
+
+/* Visualiser bars — flex child, shown below orb when listening */
+.gcanvas {
+  display: block;
+  width: 220px; height: 40px;
+  border-radius: 4px;
+  margin-top: 20px;
+  transition: opacity .35s;
+  pointer-events: none;
   flex-shrink: 0;
 }
-.g-r1 { position: absolute; border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%); width: calc(100% + 28px); height: calc(100% + 28px); border: 1px solid rgba(184,146,46,.07); animation: rspin 20s linear infinite; pointer-events: none; }
-.g-r2 { position: absolute; border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%); width: calc(100% + 56px); height: calc(100% + 56px); border: 1px dashed rgba(30,138,124,.04); animation: rspin 35s linear infinite reverse; pointer-events: none; }
-.g-yantra { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); animation: rspin 80s linear infinite reverse; pointer-events: none; opacity: .45; }
-.g-glow-ring { position: absolute; inset: -20px; border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%); background: radial-gradient(circle, rgba(184,146,46,.06) 0%, transparent 62%); animation: gGlow 4s ease-in-out infinite; pointer-events: none; }
 
-.gorb { position: absolute; inset: 0; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; transition: transform .2s ease; }
-.gorb:active { transform: scale(.97); }
-.gorb-inner { width: 100%; height: 100%; border-radius: 50%; display: flex; align-items: center; justify-content: center; position: relative; z-index: 10; }
-
-/* Visualiser — shown only when listening */
-.gcanvas {
-  position: absolute;
-  bottom: calc(50% - clamp(85px,12vw,105px) - 54px);
-  left: 50%; transform: translateX(-50%);
-  border-radius: 4px; width: 220px; height: 36px;
-  transition: opacity .35s; pointer-events: none;
-}
-
-/* Status — shown when active */
+/* Status text — flex child below canvas */
 .g-status {
-  position: absolute;
-  bottom: calc(50% - clamp(85px,12vw,105px) - 94px);
-  left: 50%; transform: translateX(-50%);
-  font-family: var(--cap); font-size: .65rem; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--g2); opacity: 0; white-space: nowrap;
+  margin-top: 10px;
+  font-family: var(--cap); font-size: .68rem;
+  letter-spacing: .2em; text-transform: uppercase;
+  color: var(--g2); opacity: 0;
+  white-space: nowrap; text-align: center;
   transition: opacity .35s, color .35s;
+  min-height: 20px;
 }
 .g-status.show { opacity: 1; }
 
-/* Hint — shown on open, hidden after first use */
+/* Hint — shown until first use */
 .g-hint {
-  margin-top: 28px;
-  font-family: var(--cap); font-size: .63rem; letter-spacing: .18em; text-transform: uppercase;
-  color: var(--ink3); text-align: center; transition: opacity .6s ease;
+  margin-top: 14px;
+  font-family: var(--cap); font-size: .62rem;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--ink3); text-align: center;
+  transition: opacity .5s ease;
 }
-.g-hint em { font-style: normal; color: var(--g2); opacity: .55; }
+.g-hint em { font-style: normal; color: var(--g2); opacity: .6; }
 
-/* Response card — slides up only when there's a response */
+/* Response card — slides up from below */
 .g-card {
-  position: absolute;
-  bottom: clamp(38px,7vh,66px);
-  left: 50%; transform: translateX(-50%) translateY(10px);
-  width: min(420px,88vw);
-  background: rgba(255,255,255,.03); border: 1px solid rgba(184,146,46,.1);
-  border-radius: 12px; padding: 14px 18px;
-  opacity: 0; transition: opacity .4s ease, transform .4s ease;
+  margin-top: 20px;
+  width: min(440px, 88vw);
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(184,146,46,.12);
+  border-radius: 14px;
+  padding: 16px 20px;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .4s ease, transform .4s ease;
   pointer-events: none;
+  max-height: 160px;
+  overflow-y: auto;
 }
-.g-card.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
-.g-card-caption { font-family: var(--cap); font-size: .57rem; color: var(--ink3); letter-spacing: .12em; text-transform: uppercase; margin-bottom: 6px; opacity: .6; }
-.g-card-lbl { display: block; font-family: var(--cap); font-size: .52rem; letter-spacing: .16em; text-transform: uppercase; color: var(--t3); opacity: .4; margin-bottom: 6px; }
-.g-card-txt { font-family: var(--body); font-size: .91rem; line-height: 1.78; color: var(--ink); }
-.g-error { color: var(--red); font-size: .7rem; margin-top: 10px; text-align: center; font-family: var(--cap); }
+.g-card.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.g-card-lbl {
+  display: block; font-family: var(--cap); font-size: .52rem;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--t3); opacity: .45; margin-bottom: 8px;
+}
+.g-card-txt {
+  font-family: var(--body); font-size: .92rem;
+  line-height: 1.75; color: var(--ink);
+}
+.g-error {
+  margin-top: 12px;
+  color: var(--red); font-size: .68rem;
+  text-align: center; font-family: var(--cap);
+  letter-spacing: .06em;
+}
+
+/* Footer hint */
 .g-foot {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
-  font-family: var(--cap); font-size: .54rem; color: rgba(184,146,46,.14);
-  letter-spacing: .09em; text-transform: uppercase; text-align: center;
-  padding: 0 16px; white-space: nowrap;
+  font-family: var(--cap); font-size: .54rem;
+  color: rgba(184,146,46,.16);
+  letter-spacing: .09em; text-transform: uppercase;
+  text-align: center; white-space: nowrap;
 }
 
 /* ── Animations ── */

@@ -582,8 +582,8 @@ function GuruMode({ user, onClose }) {
       <div className="gorb-wrap">
         <YantraLarge />
         <div className="g-r1" /><div className="g-r2" />
-        <div className="g-glow-ring" style={{pointerEvents:"none"}} />
-        <div className="gorb" onClick={startListening} style={{zIndex:10,position:"relative"}}>
+        <div className="g-glow-ring" />
+        <div className="gorb" onClick={startListening}>
           <div className="gorb-inner" ref={orbInnerRef}>
             <svg ref={orbIconRef} width="36" height="36" viewBox="0 0 24 24" fill="none"
               stroke="rgba(255,255,255,.6)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
