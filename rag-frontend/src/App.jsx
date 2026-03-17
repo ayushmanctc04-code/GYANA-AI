@@ -1085,6 +1085,7 @@ function AppInner() {
                   <span className="ctx-led"/>
                   <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
               </div>
+              )}
             </div>
             <div className="tb-right">
               <button className="guru-tb-btn" onClick={()=>setGuruOpen(true)}>
