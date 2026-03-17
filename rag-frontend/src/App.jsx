@@ -33,7 +33,7 @@ const ACCEPT = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 
 // ── Guru system prompt ────────────────────────────────────────────────────────
 const GURU_PROMPT = `You are Gyana AI, built by Ayushman Pati from Cuttack, Odisha, India.
-You are a warm, wise, brilliant companion. Friend, therapist, teacher, and guide.
+You are a god-level AI — warm, wise, and brilliant. Friend, therapist, teacher, and guide.
 You always respond in spoken English only.
 
 STRICT VOICE RULES - follow every single one:
@@ -647,7 +647,6 @@ function AppInner() {
   const [copied,        setCopied]        = useState(null);
   const [speaking,      setSpeaking]      = useState(null);
   const [autoSpeak,     setAutoSpeak]     = useState(false);
-  const [mode,          setMode]          = useState("docs");
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
   const [conversations, setConversations] = useState([]);
   const [activeConvId,  setActiveConvId]  = useState(null);
@@ -712,13 +711,13 @@ function AppInner() {
     if(!user||messages.length===0) return;
     const convs=loadConversations(user.uid);
     const idx=convs.findIndex(c=>c.id===convId);
-    const conv={id:convId,title:messages[0]?.text?.slice(0,40)||"Conversation",messages,date:dateStr(),timestamp:Date.now(),mode};
+    const conv={id:convId,title:messages[0]?.text?.slice(0,40)||"Conversation",messages,date:dateStr(),timestamp:Date.now()};
     if(idx>=0)convs[idx]=conv;else convs.unshift(conv);
     const trimmed=convs.slice(0,50);
     saveConversations(user.uid,trimmed); setConversations(trimmed);
-  },[user,mode]);
+  },[user]);
 
-  const loadConversation = conv=>{setMsgs(conv.messages);setActiveConvId(conv.id);currentConvRef.current=conv.id;setMode(conv.mode||"docs");setSidebarOpen(false);};
+  const loadConversation = conv=>{setMsgs(conv.messages);setActiveConvId(conv.id);currentConvRef.current=conv.id;setSidebarOpen(false);};
   const deleteConversation=(convId,e)=>{
     e.stopPropagation();
     const convs=loadConversations(user.uid).filter(c=>c.id!==convId);
@@ -828,27 +827,56 @@ function AppInner() {
     setLoading(false);
   };
 
-  // Send
+  // Unified smart send — always tries docs first if uploaded, falls back to general AI
   const send=useCallback(async(override)=>{
     const q=(override??input).trim();
     if(!q||loading)return;
-    if(mode==="docs"&&!readyDocs.length){notify("Upload a document first, or switch to AI mode","err");return;}
     if(!currentConvRef.current){const newId=uid();currentConvRef.current=newId;setActiveConvId(newId);}
     pushMsg({role:"user",text:q,time:timeNow()});
     setInput("");setLoading(true);
     const aiId=uid();
     pushMsg({id:aiId,role:"ai",text:"",time:timeNow(),sources:[],streaming:true,error:false});
-    if(mode==="ai"){await askGeneralAI(q,aiId);return;}
-    const userId=user?.uid||"default";let gotStream=false;
+
+    const userId=user?.uid||"default";
+
+    // If no docs uploaded, go straight to general AI
+    if(!readyDocs.length){
+      await askGeneralAI(q,aiId);
+      return;
+    }
+
+    // Docs are uploaded — try doc search first
+    let gotStream=false; let fullText="";
     const fallback=setTimeout(async()=>{
       if(gotStream)return;abortRef.current?.();
-      try{const{data}=await axios.post(`${API}/ask`,{question:q,user_id:userId});patchMsg(aiId,{text:data.answer,sources:data.sources??[],streaming:false});}
-      catch(e){patchMsg(aiId,{text:e.response?.data?.detail||e.message,error:true,streaming:false});}
-      finally{setLoading(false);}
+      try{
+        const{data}=await axios.post(`${API}/ask`,{question:q,user_id:userId});
+        const ans=data.answer||"";
+        const noInfo=!ans.trim()||
+          ans.toLowerCase().includes("not found in")||
+          ans.toLowerCase().includes("i don't have information")||
+          ans.toLowerCase().includes("no relevant")||
+          ans.toLowerCase().includes("cannot find")||
+          (data.sources&&data.sources.length===0&&ans.length<100);
+        if(noInfo){
+          patchMsg(aiId,{text:"",sources:[],streaming:true});
+          await askGeneralAI(q,aiId);
+          return;
+        }
+        patchMsg(aiId,{text:ans,sources:data.sources??[],streaming:false});
+      }catch(e){
+        // Doc search failed — fall back to general AI
+        await askGeneralAI(q,aiId);
+        return;
+      }finally{setLoading(false);}
     },4000);
+
     let aborted=false;abortRef.current=()=>{aborted=true;};
     try{
-      const res=await fetch(`${API}/ask/stream`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,user_id:userId})});
+      const res=await fetch(`${API}/ask/stream`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({question:q,user_id:userId})
+      });
       if(!res.ok)throw new Error();
       const reader=res.body.getReader(),dec=new TextDecoder();
       while(!aborted){
@@ -856,13 +884,39 @@ function AppInner() {
         for(const line of dec.decode(value,{stream:true}).split("\n")){
           if(!line.startsWith("data: "))continue;
           const token=line.slice(6);
-          if(token==="[DONE]"){clearTimeout(fallback);patchMsg(aiId,{streaming:false});setLoading(false);return;}
-          if(token.startsWith("[ERROR]")){clearTimeout(fallback);patchMsg(aiId,{streaming:false,error:true});setLoading(false);return;}
-          gotStream=true;patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
+          if(token==="[DONE]"){
+            clearTimeout(fallback);
+            // Check if doc answer was useful — if not, fall back to general AI
+            const noInfo=!fullText.trim()||
+              fullText.toLowerCase().includes("not found in")||
+              fullText.toLowerCase().includes("i don't have information")||
+              fullText.toLowerCase().includes("no relevant");
+            if(noInfo){
+              patchMsg(aiId,{text:"",sources:[],streaming:true});
+              await askGeneralAI(q,aiId);
+              return;
+            }
+            patchMsg(aiId,{streaming:false});
+            setLoading(false);
+            return;
+          }
+          if(token.startsWith("[ERROR]")){
+            clearTimeout(fallback);
+            // Error from doc search — fall back to general AI silently
+            patchMsg(aiId,{text:"",sources:[],streaming:true});
+            await askGeneralAI(q,aiId);
+            return;
+          }
+          gotStream=true;
+          fullText+=token.replace(/\\n/g,"\n");
+          patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
         }
       }
-    }catch(_){}
-  },[input,loading,readyDocs,notify,user,mode]);
+    }catch(_){
+      clearTimeout(fallback);
+      await askGeneralAI(q,aiId);
+    }
+  },[input,loading,readyDocs,notify,user,askGeneralAI]);
 
   // Mic
   const startMic=useCallback(async()=>{
@@ -888,8 +942,8 @@ function AppInner() {
   if (user===undefined) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100dvh",background:"var(--bg)",color:"var(--g2)",fontSize:".82rem",letterSpacing:".15em",fontFamily:"var(--cap)"}}>Awakening Gyana AI…</div>;
   if (user===null) return <LoginPage/>;
 
-  const suggestions = mode==="ai" ? AI_SUGGESTIONS : DOC_SUGGESTIONS;
-  const placeholder = micOn?"Recording…":mode==="ai"?"Ask your guru anything…":readyDocs.length===0?"Upload a document to begin…":"Ask anything about your documents…";
+  const suggestions = DOC_SUGGESTIONS;
+  const placeholder = micOn ? "Recording…" : readyDocs.length===0 ? "Ask anything, or upload a document…" : "Ask anything about your documents…";
 
   return (
     <>
@@ -966,7 +1020,7 @@ function AppInner() {
                 ?<div className="conv-empty">No conversations yet.</div>
                 :conversations.map(conv=>(
                   <div key={conv.id} className={`conv-item${activeConvId===conv.id?" active":""}`} onClick={()=>loadConversation(conv)}>
-                    <div className="conv-ico">{conv.mode==="ai"?<ChatSVG/>:<DocSVG/>}</div>
+                    <div className="conv-ico"><ChatSVG/></div>
                     <div className="conv-info">
                       <div className="conv-title">{conv.title}</div>
                       <div className="conv-meta">{conv.date} · {conv.messages.length} msgs</div>
@@ -987,7 +1041,7 @@ function AppInner() {
               <div className="model-led"/>
               <div><div className="model-name">LLaMA 3.3 70B</div><div className="model-sub">Groq · Supabase · ElevenLabs</div></div>
             </div>
-            <p className="doc-count">{mode==="ai"?"General AI mode":readyDocs.length===0?"No documents indexed":`${readyDocs.length} doc${readyDocs.length>1?"s":""} in context`}</p>
+            <p className="doc-count">{readyDocs.length===0?"No documents indexed":`${readyDocs.length} doc${readyDocs.length>1?"s":""} in context`}</p>
           </div>
         </aside>
 
@@ -998,13 +1052,12 @@ function AppInner() {
           <div className="topbar">
             <div className="tb-left">
               <button className="menu-btn" onClick={()=>setSidebarOpen(true)}><MenuSVG/></button>
-              <span className="tb-title">{mode==="ai"?"AI Assistant":"Query Interface"}</span>
-              {mode==="docs"&&readyDocs.length>0&&(
+              <span className="tb-title">Gyana AI</span>
+              {readyDocs.length>0&&(
                 <div className="ctx-pill">
                   <span className="ctx-led"/>
                   <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
-                </div>
-              )}
+              </div>
             </div>
             <div className="tb-right">
               <button className="guru-tb-btn" onClick={()=>setGuruOpen(true)}>
@@ -1014,10 +1067,7 @@ function AppInner() {
                 style={autoSpeak?{borderColor:"rgba(184,146,46,.3)",color:"var(--g2)",background:"rgba(184,146,46,.08)"}:{}}>
                 {autoSpeak?"🔊":"🔇"}
               </button>
-              <div className="mode-toggle">
-                <button className={`mode-btn${mode==="docs"?" active":""}`} onClick={()=>setMode("docs")}><DocSVG/> Doc</button>
-                <button className={`mode-btn${mode==="ai"?" active":""}`}   onClick={()=>setMode("ai")}><ChatSVG/> AI</button>
-              </div>
+
               {msgs.length>0&&<button className="top-btn" onClick={startNewConversation}>Clear</button>}
             </div>
           </div>
@@ -1035,15 +1085,13 @@ function AppInner() {
               <h1 className="wh">Hey <em>Guru</em></h1>
               <div className="wsub">Gyana AI · Knowledge System</div>
               <p className="wp">
-                {mode==="ai"
-                  ?"Your personal guru — friend, advisor, teacher, and companion."
-                  :<>Upload documents and ask anything.<br/>Or say <span>"Hey Guru"</span> to activate live voice.</>}
+                Upload documents and ask anything. Gyana reads them automatically.<br/>
+                Or say <span>"Hey Guru"</span> to activate live voice.
               </p>
               <button className="guru-cta" onClick={()=>setGuruOpen(true)}>
                 <ChakraSVG size={12} op=".65"/> Enter Guru Mode
               </button>
-              {(mode==="ai"||readyDocs.length>0)&&(
-                <div className="sug-grid">
+              <div className="sug-grid">
                   {suggestions.map(s=>(
                     <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
                       <span className="sug-t">{s.title}</span>
@@ -1111,7 +1159,7 @@ function AppInner() {
                   <button className={`tool-btn${micOn?" mic-on":""}`} onClick={micOn?stopMic:startMic}>
                     {micOn?<span className="rec-row"><span className="rec-dot"/><span className="rec-t">{fmtMic(micSec)}</span></span>:<MicSVG/>}
                   </button>
-                  {mode==="docs"&&<button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSVG/></button>}
+                  <button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSVG/></button>
                   <button className="tool-btn" onClick={()=>setGuruOpen(true)} title="Guru Mode"><ChakraSVG size={13} op=".45"/></button>
                 </div>
                 <button className="send-btn" onClick={()=>send()} disabled={loading||!input.trim()||micOn}>
