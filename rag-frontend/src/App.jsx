@@ -1084,7 +1084,7 @@ function AppInner() {
                 <div className="ctx-pill">
                   <span className="ctx-led"/>
                   <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
-              </div>
+                </div>
               )}
             </div>
             <div className="tb-right">
@@ -1128,14 +1128,13 @@ function AppInner() {
                 <ChakraSVG size={12} op=".65"/> Enter Guru Mode
               </button>
               <div className="sug-grid">
-                  {suggestions.map(s=>(
-                    <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
-                      <span className="sug-t">{s.title}</span>
-                      <span className="sug-d">{s.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                {suggestions.map(s=>(
+                  <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
+                    <span className="sug-t">{s.title}</span>
+                    <span className="sug-d">{s.desc}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Messages */}
@@ -1164,37 +1163,27 @@ function AppInner() {
                             {msg.sources.map((s,i)=><span key={i} className="src-chip">{s}</span>)}
                           </div>
                         )}
-                        {/* Images */}
-                        {msg.images?.map((b64,i)=>(
+                        {msg.images?.length>0&&msg.images.map((b64,i)=>(
                           <div key={i} style={{marginTop:"10px"}}>
-                            <img src={`data:image/png;base64,${b64}`} alt="Generated"
-                              style={{maxWidth:"100%",borderRadius:"10px",border:"1px solid rgba(184,146,46,.15)"}}/>
-                            <button className="act-btn" style={{marginTop:"6px"}}
-                              onClick={()=>{const a=document.createElement("a");a.href=`data:image/png;base64,${b64}`;a.download="gyana_image.png";a.click();}}>
-                              ⬇ Download Image
-                            </button>
+                            <img src={`data:image/png;base64,${b64}`} alt="Generated" style={{maxWidth:"100%",borderRadius:"10px",border:"1px solid rgba(184,146,46,.15)"}}/>
+                            <button className="act-btn" style={{marginTop:"6px"}} onClick={()=>{const a=document.createElement("a");a.href=`data:image/png;base64,${b64}`;a.download="gyana_image.png";a.click();}}>⬇ Download</button>
                           </div>
                         ))}
-
-                        {/* Code results */}
-                        {msg.codeResults?.map((cr,i)=>(
+                        {msg.codeResults?.length>0&&msg.codeResults.map((cr,i)=>(
                           <div key={i} style={{marginTop:"10px",background:"rgba(0,0,0,.3)",borderRadius:"8px",padding:"12px",border:"1px solid rgba(255,255,255,.08)"}}>
                             <div style={{fontSize:".65rem",color:"var(--t3)",fontFamily:"var(--cap)",letterSpacing:".1em",marginBottom:"6px"}}>CODE OUTPUT</div>
                             {cr.output&&<pre style={{fontSize:".8rem",color:"var(--ink)",whiteSpace:"pre-wrap",margin:0}}>{cr.output}</pre>}
                             {cr.error&&<pre style={{fontSize:".8rem",color:"var(--red)",whiteSpace:"pre-wrap",margin:0}}>{cr.error}</pre>}
                           </div>
                         ))}
-
-                        {/* File downloads */}
-                        {msg.files?.map((fd,i)=>(
+                        {msg.files?.length>0&&msg.files.map((fd,i)=>(
                           <div key={i} style={{marginTop:"10px",display:"flex",alignItems:"center",gap:"10px",padding:"10px 14px",background:"rgba(184,146,46,.06)",border:"1px solid rgba(184,146,46,.15)",borderRadius:"8px"}}>
-                            <span style={{fontSize:"1.2rem"}}>📄</span>
+                            <span>📄</span>
                             <span style={{fontSize:".8rem",color:"var(--ink)",flex:1}}>{fd.filename}</span>
                             <button className="act-btn" onClick={()=>downloadFile(fd.filename,fd.content,fd.filetype)}>⬇ Download</button>
                           </div>
                         ))}
-
-                        {!msg.streaming&&!msg.error&&(
+                                                {!msg.streaming&&!msg.error&&(
                           <div className="a-acts">
                             <button className="act-btn" onClick={()=>copyMsg(msg.id,msg.text)}>
                               {copied===msg.id?<><CheckSVG/> Copied</>:<><CopySVG/> Copy</>}
