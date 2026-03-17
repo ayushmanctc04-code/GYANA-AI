@@ -54,6 +54,15 @@ const timeNow  = ()     => new Date().toLocaleTimeString("en-US",{hour:"2-digit"
 const dateStr  = ()     => new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"});
 const uid      = ()     => crypto.randomUUID();
 
+// Download file helper
+const downloadFile = (filename, content, filetype) => {
+  const blob = new Blob([content], {type: "text/plain"});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+};
+
 const CONV_KEY          = (u) => `gyana_conversations_${u}`;
 const loadConversations = (u) => { try { const r = localStorage.getItem(CONV_KEY(u)); return r ? JSON.parse(r) : []; } catch { return []; } };
 const saveConversations = (u, c) => { try { localStorage.setItem(CONV_KEY(u), JSON.stringify(c)); } catch {} };
@@ -652,6 +661,7 @@ function AppInner() {
   const [activeConvId,  setActiveConvId]  = useState(null);
   const [sidebarTab,    setSidebarTab]    = useState("docs");
   const [guruOpen,      setGuruOpen]      = useState(false);
+  const [statusMsg,     setStatusMsg]     = useState("");
 
   const feedRef        = useRef(null);
   const fileRef        = useRef(null);
@@ -802,30 +812,89 @@ function AppInner() {
   const onDrop=useCallback(e=>{e.preventDefault();setDrag(false);handleFiles(e.dataTransfer.files);},[handleFiles]);
   const clearDocs=async()=>{try{await axios.delete(`${API}/documents`,{headers:authHeaders()});setDocs([]);notify("Knowledge base cleared");}catch(e){notify(e.response?.data?.detail||e.message,"err");}};
 
-  // General AI stream
-  const askGeneralAI=async(question,aiId)=>{
-    const userId=user?.uid||"default";let got=false;
-    try{
-      const res=await fetch(`${API}/ask-general/stream`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question,user_id:userId})});
-      if(!res.ok)throw new Error();
-      const reader=res.body.getReader(),dec=new TextDecoder();
-      while(true){
-        const{done,value}=await reader.read();if(done)break;
-        for(const line of dec.decode(value,{stream:true}).split("\n")){
-          if(!line.startsWith("data: "))continue;
-          const token=line.slice(6);
-          if(token==="[DONE]"){patchMsg(aiId,{streaming:false});setLoading(false);return;}
-          if(token.startsWith("[ERROR]")){patchMsg(aiId,{streaming:false,error:true});setLoading(false);return;}
-          got=true;patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
+  // Agentic stream handler — handles all tool responses
+  const processAgenticStream = useCallback(async(endpoint, question, aiId) => {
+    const userId = user?.uid || "default";
+    let got = false;
+    try {
+      const res = await fetch(`${API}${endpoint}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({question, user_id: userId}),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read(); if (done) break;
+        buf += dec.decode(value, {stream: true});
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const token = line.slice(6);
+          if (!token) continue;
+
+          if (token === "[DONE]") {
+            patchMsg(aiId, {streaming: false});
+            setLoading(false); setStatusMsg("");
+            return;
+          }
+          if (token.startsWith("[ERROR]")) {
+            patchMsg(aiId, {streaming: false, error: true, text: token.slice(7)});
+            setLoading(false); setStatusMsg("");
+            return;
+          }
+          if (token.startsWith("[STATUS]")) {
+            setStatusMsg(token.slice(8));
+            continue;
+          }
+          if (token.startsWith("[IMAGE]")) {
+            const b64 = token.slice(7);
+            patchMsg(aiId, m => ({images: [...(m.images||[]), b64]}));
+            continue;
+          }
+          if (token.startsWith("[CODE_RESULT]")) {
+            try {
+              const cr = JSON.parse(token.slice(13));
+              patchMsg(aiId, m => ({codeResults: [...(m.codeResults||[]), cr]}));
+            } catch(_) {}
+            continue;
+          }
+          if (token.startsWith("[FILE]")) {
+            try {
+              const fd = JSON.parse(token.slice(6));
+              patchMsg(aiId, m => ({files: [...(m.files||[]), fd]}));
+            } catch(_) {}
+            continue;
+          }
+          if (token.startsWith("[SOURCES]")) {
+            try {
+              const srcs = JSON.parse(token.slice(9));
+              patchMsg(aiId, {sources: srcs});
+            } catch(_) {}
+            continue;
+          }
+          // Regular text token
+          got = true;
+          patchMsg(aiId, m => ({text: (m.text||"") + token.replace(/\\n/g, "\n")}));
         }
       }
-    }catch(_){}
-    if(!got){
-      try{const{data}=await axios.post(`${API}/ask-general`,{question,user_id:userId});patchMsg(aiId,{text:data.answer,sources:[],streaming:false});}
-      catch{patchMsg(aiId,{text:"Connection error.",error:true,streaming:false});}
+    } catch(_) {}
+    if (!got) {
+      try {
+        const {data} = await axios.post(`${API}/ask-general`, {question, user_id: userId});
+        patchMsg(aiId, {text: data.answer, sources: [], streaming: false});
+      } catch {
+        patchMsg(aiId, {text: "Connection error. Please try again.", error: true, streaming: false});
+      }
     }
-    setLoading(false);
-  };
+    setLoading(false); setStatusMsg("");
+  }, [user, patchMsg]);
+
+  const askGeneralAI = useCallback(async (question, aiId) => {
+    await processAgenticStream("/ask-general/stream", question, aiId);
+  }, [processAgenticStream]);
 
   // Unified smart send — always tries docs first if uploaded, falls back to general AI
   const send=useCallback(async(override)=>{
@@ -841,7 +910,7 @@ function AppInner() {
 
     // If no docs uploaded, go straight to general AI
     if(!readyDocs.length){
-      await askGeneralAI(q,aiId);
+      await processAgenticStream("/ask-general/stream", q, aiId);
       return;
     }
 
@@ -871,52 +940,10 @@ function AppInner() {
       }finally{setLoading(false);}
     },4000);
 
-    let aborted=false;abortRef.current=()=>{aborted=true;};
-    try{
-      const res=await fetch(`${API}/ask/stream`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({question:q,user_id:userId})
-      });
-      if(!res.ok)throw new Error();
-      const reader=res.body.getReader(),dec=new TextDecoder();
-      while(!aborted){
-        const{done,value}=await reader.read();if(done)break;
-        for(const line of dec.decode(value,{stream:true}).split("\n")){
-          if(!line.startsWith("data: "))continue;
-          const token=line.slice(6);
-          if(token==="[DONE]"){
-            clearTimeout(fallback);
-            // Check if doc answer was useful — if not, fall back to general AI
-            const noInfo=!fullText.trim()||
-              fullText.toLowerCase().includes("not found in")||
-              fullText.toLowerCase().includes("i don't have information")||
-              fullText.toLowerCase().includes("no relevant");
-            if(noInfo){
-              patchMsg(aiId,{text:"",sources:[],streaming:true});
-              await askGeneralAI(q,aiId);
-              return;
-            }
-            patchMsg(aiId,{streaming:false});
-            setLoading(false);
-            return;
-          }
-          if(token.startsWith("[ERROR]")){
-            clearTimeout(fallback);
-            // Error from doc search — fall back to general AI silently
-            patchMsg(aiId,{text:"",sources:[],streaming:true});
-            await askGeneralAI(q,aiId);
-            return;
-          }
-          gotStream=true;
-          fullText+=token.replace(/\\n/g,"\n");
-          patchMsg(aiId,m=>({text:(m.text||"")+token.replace(/\\n/g,"\n")}));
-        }
-      }
-    }catch(_){
-      clearTimeout(fallback);
-      await askGeneralAI(q,aiId);
-    }
-  },[input,loading,readyDocs,notify,user,askGeneralAI]);
+    // Use the full agentic stream for doc mode too
+    clearTimeout(fallback);
+    await processAgenticStream("/ask/stream", q, aiId);
+  },[input,loading,readyDocs,notify,user,processAgenticStream]);
 
   // Mic
   const startMic=useCallback(async()=>{
@@ -1072,6 +1099,14 @@ function AppInner() {
             </div>
           </div>
 
+          {statusMsg&&(
+            <div style={{position:"absolute",top:"54px",left:"50%",transform:"translateX(-50%)",zIndex:20,
+              padding:"6px 16px",background:"rgba(30,138,124,.12)",border:"1px solid rgba(30,138,124,.2)",
+              borderRadius:"20px",fontSize:".7rem",color:"var(--t3)",fontFamily:"var(--cap)",
+              letterSpacing:".1em",textTransform:"uppercase",whiteSpace:"nowrap",backdropFilter:"blur(10px)"}}>
+              ◎ {statusMsg}
+            </div>
+          )}
           <div className="feed" ref={feedRef}>
             {/* Welcome screen */}
             <div className="welcome" style={{display:msgs.length===0?"flex":"none"}}>
@@ -1128,6 +1163,36 @@ function AppInner() {
                             {msg.sources.map((s,i)=><span key={i} className="src-chip">{s}</span>)}
                           </div>
                         )}
+                        {/* Images */}
+                        {msg.images?.map((b64,i)=>(
+                          <div key={i} style={{marginTop:"10px"}}>
+                            <img src={`data:image/png;base64,${b64}`} alt="Generated"
+                              style={{maxWidth:"100%",borderRadius:"10px",border:"1px solid rgba(184,146,46,.15)"}}/>
+                            <button className="act-btn" style={{marginTop:"6px"}}
+                              onClick={()=>{const a=document.createElement("a");a.href=`data:image/png;base64,${b64}`;a.download="gyana_image.png";a.click();}}>
+                              ⬇ Download Image
+                            </button>
+                          </div>
+                        ))}
+
+                        {/* Code results */}
+                        {msg.codeResults?.map((cr,i)=>(
+                          <div key={i} style={{marginTop:"10px",background:"rgba(0,0,0,.3)",borderRadius:"8px",padding:"12px",border:"1px solid rgba(255,255,255,.08)"}}>
+                            <div style={{fontSize:".65rem",color:"var(--t3)",fontFamily:"var(--cap)",letterSpacing:".1em",marginBottom:"6px"}}>CODE OUTPUT</div>
+                            {cr.output&&<pre style={{fontSize:".8rem",color:"var(--ink)",whiteSpace:"pre-wrap",margin:0}}>{cr.output}</pre>}
+                            {cr.error&&<pre style={{fontSize:".8rem",color:"var(--red)",whiteSpace:"pre-wrap",margin:0}}>{cr.error}</pre>}
+                          </div>
+                        ))}
+
+                        {/* File downloads */}
+                        {msg.files?.map((fd,i)=>(
+                          <div key={i} style={{marginTop:"10px",display:"flex",alignItems:"center",gap:"10px",padding:"10px 14px",background:"rgba(184,146,46,.06)",border:"1px solid rgba(184,146,46,.15)",borderRadius:"8px"}}>
+                            <span style={{fontSize:"1.2rem"}}>📄</span>
+                            <span style={{fontSize:".8rem",color:"var(--ink)",flex:1}}>{fd.filename}</span>
+                            <button className="act-btn" onClick={()=>downloadFile(fd.filename,fd.content,fd.filetype)}>⬇ Download</button>
+                          </div>
+                        ))}
+
                         {!msg.streaming&&!msg.error&&(
                           <div className="a-acts">
                             <button className="act-btn" onClick={()=>copyMsg(msg.id,msg.text)}>
