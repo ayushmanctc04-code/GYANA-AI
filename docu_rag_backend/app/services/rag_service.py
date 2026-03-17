@@ -223,7 +223,7 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
             yield "data: [STATUS]Reading that page...\n\n"
             result = await read_url(url_match.group())
             if result.get("content"):
-                system += f"\n\nPAGE CONTENT from {result['url']}:\n{result['content']}\nAnswer the user's question about this page."
+                system += f"\n\nPAGE CONTENT from {result['url']}:\n{result['content']}\nAnswer the user's question about this page. Do NOT output any tool JSON."
             else:
                 yield f"data: Could not read that page. {result.get('error','')}\n\n"
                 yield "data: [DONE]\n\n"
@@ -235,6 +235,7 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
         if sr.get("results") or sr.get("answer"):
             ctx, sources = build_search_context(sr, question)
             system += f"\n\n{ctx}"
+            system += "\n\nYou already have live search results above. Answer directly. Do NOT output any {tool} JSON."
 
     elif intent == "image":
         yield "data: [STATUS]Generating image...\n\n"
@@ -248,6 +249,9 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
             return
         else:
             yield f"data: Image generation failed: {img.get('error')}. Let me describe it instead.\n\n"
+            system += "
+
+Do NOT output any tool call JSON. Answer directly."
 
     # ── Stream LLM ────────────────────────────────────────────────────────────
     messages = [{"role": "system", "content": system}]
@@ -257,6 +261,7 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
     full      = ""
     tool_buf  = ""
     in_tool   = False
+    sent_buf  = ""  # track what we've already sent to avoid re-sending
 
     try:
         stream = groq_client.chat.completions.create(
@@ -268,14 +273,22 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
             if not token: continue
             full += token
 
-            if not in_tool and '{"tool"' in full:
-                idx = full.rfind('{"tool"')
-                before = full[:idx].strip()
-                if before:
-                    yield f"data: {before}\n\n"
-                tool_buf = full[idx:]
-                in_tool  = True
-                continue
+            # Detect start of tool JSON — buffer everything from { onwards
+            if not in_tool and ('{"tool"' in full or ('{' in full and '"tool"' in full)):
+                # Find where the tool JSON starts
+                for marker in ['{"tool"', '{ "tool"']:
+                    idx = full.find(marker)
+                    if idx >= 0:
+                        # Send everything before the tool call
+                        before = full[:idx].strip()
+                        unsent = before[len(sent_buf):]
+                        if unsent.strip():
+                            yield f"data: {unsent}\n\n"
+                        tool_buf = full[idx:]
+                        in_tool  = True
+                        break
+                if in_tool:
+                    continue
 
             if in_tool:
                 tool_buf += token
