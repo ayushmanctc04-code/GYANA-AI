@@ -1,10 +1,17 @@
 """
-Gyana AI — Agentic Service
-One AI for everything. Works like Claude.
-DuckDuckGo web search — unlimited, free, no API key needed.
+Gyana AI - Agentic Service
+One AI for everything. DuckDuckGo search, unlimited free.
 """
 
-import os, re, json, base64, asyncio, subprocess, sys, tempfile, urllib.parse
+import os
+import re
+import json
+import base64
+import asyncio
+import subprocess
+import sys
+import tempfile
+import urllib.parse
 from collections import defaultdict, deque
 from groq import Groq
 import httpx
@@ -16,63 +23,57 @@ TAVILY_KEY  = os.environ.get("TAVILY_API_KEY", "")
 MODEL       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # ── Per-user memory ───────────────────────────────────────────────────────────
-_memory: dict = defaultdict(lambda: deque(maxlen=30))
+_memory = defaultdict(lambda: deque(maxlen=30))
 
-def get_history(uid: str) -> list:
+def get_history(uid):
     return list(_memory[uid])
 
-def add_history(uid: str, role: str, content: str):
+def add_history(uid, role, content):
     _memory[uid].append({"role": role, "content": content})
 
-def clear_history(uid: str):
+def clear_history(uid):
     _memory[uid].clear()
 
 # ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM = """You are Gyana AI — the most powerful all-in-one AI, built by Ayushman Pati from Cuttack, Odisha, India.
-
-You are simultaneously:
-- World-class programmer in every language
-- Real-time researcher with live web search
-- Creative problem solver
-- Warm friend, therapist, and life coach
-- Teacher who can explain anything
-- Business strategist and startup advisor
-- Writer: code, essays, emails, reports, stories
-
-TOOLS — use automatically when needed:
-
-{"tool":"web_search","query":"search query"}
-Use when: news, current events, prices, weather, sports scores, recent info, stock prices, anything time-sensitive, any fact you are not 100% sure about
-
-{"tool":"read_url","url":"https://..."}
-Use when: user pastes a URL or asks to read/summarise a website
-
-{"tool":"generate_image","prompt":"detailed visual description"}
-Use when: user asks to draw, generate, create, or show any image
-
-{"tool":"run_code","code":"python code","language":"python"}
-Use when: user asks to execute/run code or needs complex calculations
-
-{"tool":"create_file","filename":"name.ext","content":"full content","filetype":"txt"}
-Use when: user asks to create a downloadable document, report, or file
-
-RULES:
-1. NEVER say "my knowledge cutoff" — use web_search instead
-2. NEVER give incomplete code — always write full working solutions
-3. NEVER say "I cannot" — find a way or explain clearly
-4. For ANY question about current events, news, prices, people — ALWAYS search first
-5. Be direct and brilliant — no padding, no filler
-6. Match energy: casual when chatting, detailed when working
-7. If asked who built you: Ayushman Pati, from Cuttack, Odisha, India
-8. You are Gyana — never say you are "just an AI"
-
-Output tool calls as a single JSON line — nothing else on that line."""
+SYSTEM = (
+    "You are Gyana AI, the most powerful all-in-one AI, built by Ayushman Pati "
+    "from Cuttack, Odisha, India.\n\n"
+    "You are simultaneously:\n"
+    "- World-class programmer in every language\n"
+    "- Real-time researcher with live web search\n"
+    "- Creative problem solver\n"
+    "- Warm friend, therapist, and life coach\n"
+    "- Teacher who can explain anything\n"
+    "- Business strategist and startup advisor\n"
+    "- Writer: code, essays, emails, reports, stories\n\n"
+    "TOOLS - use automatically when needed:\n\n"
+    '{"tool":"web_search","query":"search query"}\n'
+    "Use when: news, current events, prices, weather, sports, recent info, "
+    "stock prices, anything time-sensitive, any fact you are not 100% sure about\n\n"
+    '{"tool":"read_url","url":"https://..."}\n'
+    "Use when: user pastes a URL or asks to read/summarise a website\n\n"
+    '{"tool":"generate_image","prompt":"detailed visual description"}\n'
+    "Use when: user asks to draw, generate, create, or show any image\n\n"
+    '{"tool":"run_code","code":"python code","language":"python"}\n'
+    "Use when: user asks to execute/run code or needs complex calculations\n\n"
+    '{"tool":"create_file","filename":"name.ext","content":"full content","filetype":"txt"}\n'
+    "Use when: user asks to create a downloadable document, report, or file\n\n"
+    "RULES:\n"
+    "1. NEVER say 'my knowledge cutoff' - use web_search instead\n"
+    "2. NEVER give incomplete code - always write full working solutions\n"
+    "3. NEVER say 'I cannot' - find a way or explain clearly\n"
+    "4. For ANY question about current events, news, prices - ALWAYS search first\n"
+    "5. Be direct and brilliant - no padding, no filler\n"
+    "6. Match energy: casual when chatting, detailed when working\n"
+    "7. If asked who built you: Ayushman Pati, from Cuttack, Odisha, India\n"
+    "8. You are Gyana - never say you are just an AI\n"
+    "Output tool calls as a single JSON line - nothing else on that line."
+)
 
 # ── Web search ────────────────────────────────────────────────────────────────
-async def search_web(query: str) -> dict:
-    """Search using Tavily (premium) or DuckDuckGo (free unlimited fallback)."""
+async def search_web(query):
+    """Tavily premium if key exists, DuckDuckGo unlimited free fallback."""
 
-    # Try Tavily first if key available
     if TAVILY_KEY:
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
@@ -87,33 +88,47 @@ async def search_web(query: str) -> dict:
                 if d.get("results"):
                     return {
                         "answer": d.get("answer", ""),
-                        "results": [{"title": x.get("title",""), "url": x.get("url",""), "content": x.get("content","")[:500]} for x in d["results"][:6]]
+                        "results": [
+                            {
+                                "title": x.get("title", ""),
+                                "url": x.get("url", ""),
+                                "content": x.get("content", "")[:500]
+                            }
+                            for x in d["results"][:6]
+                        ]
                     }
-        except:
+        except Exception:
             pass
 
-    # DuckDuckGo — unlimited, always free
+    # DuckDuckGo - unlimited, always free
     try:
         enc = urllib.parse.quote_plus(query)
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        headers = {"User-Agent": ua}
+        results = []
+        answer = ""
 
         async with httpx.AsyncClient(timeout=12.0, headers=headers, follow_redirects=True) as c:
-            results = []
-
-            # Instant answers API
+            # Instant answer API
             try:
-                r = await c.get(f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1")
+                r = await c.get(
+                    "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1".format(enc)
+                )
                 d = r.json()
                 answer = d.get("AbstractText", "") or d.get("Answer", "")
                 for t in d.get("RelatedTopics", [])[:4]:
                     if isinstance(t, dict) and t.get("Text"):
-                        results.append({"title": t.get("Text","")[:80], "url": t.get("FirstURL",""), "content": t.get("Text","")[:400]})
-            except:
-                answer = ""
+                        results.append({
+                            "title": t.get("Text", "")[:80],
+                            "url": t.get("FirstURL", ""),
+                            "content": t.get("Text", "")[:400]
+                        })
+            except Exception:
+                pass
 
-            # HTML search for real results
+            # HTML search
             try:
-                r2 = await c.get(f"https://html.duckduckgo.com/html/?q={enc}")
+                r2 = await c.get("https://html.duckduckgo.com/html/?q={}".format(enc))
                 html = r2.text
                 titles   = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
                 snippets = re.findall(r'class="result__snippet">(.*?)</a>', html, re.DOTALL)
@@ -124,19 +139,23 @@ async def search_web(query: str) -> dict:
                     u = urllib.parse.unquote(urls[i]) if i < len(urls) else ""
                     if t and s:
                         results.append({"title": t[:100], "url": u, "content": s[:400]})
-            except:
+            except Exception:
                 pass
 
-            return {"answer": answer, "results": results[:6]}
+        return {"answer": answer, "results": results[:6]}
 
     except Exception as e:
         return {"error": str(e), "answer": "", "results": []}
 
+
 # ── Read URL ──────────────────────────────────────────────────────────────────
-async def read_url(url: str) -> dict:
+async def read_url(url):
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}) as c:
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        async with httpx.AsyncClient(
+            timeout=15.0, follow_redirects=True,
+            headers={"User-Agent": ua}
+        ) as c:
             r = await c.get(url)
             html = r.text
             html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
@@ -147,8 +166,9 @@ async def read_url(url: str) -> dict:
     except Exception as e:
         return {"url": url, "content": "", "error": str(e)}
 
+
 # ── Generate image ────────────────────────────────────────────────────────────
-async def generate_image(prompt: str) -> dict:
+async def generate_image(prompt):
     if not HF_KEY:
         return {"error": "HF_API_KEY not configured"}
     models = [
@@ -158,63 +178,108 @@ async def generate_image(prompt: str) -> dict:
     async with httpx.AsyncClient(timeout=60.0) as c:
         for url in models:
             try:
-                r = await c.post(url, headers={"Authorization": f"Bearer {HF_KEY}"},
-                    json={"inputs": prompt, "parameters": {"num_inference_steps": 4}})
+                r = await c.post(
+                    url,
+                    headers={"Authorization": "Bearer {}".format(HF_KEY)},
+                    json={"inputs": prompt, "parameters": {"num_inference_steps": 4}}
+                )
                 if r.status_code == 200 and len(r.content) > 1000:
-                    return {"image_b64": base64.b64encode(r.content).decode(), "prompt": prompt}
-            except:
+                    return {
+                        "image_b64": base64.b64encode(r.content).decode(),
+                        "prompt": prompt
+                    }
+            except Exception:
                 continue
-    return {"error": "Image generation failed — try again"}
+    return {"error": "Image generation failed - try again"}
+
 
 # ── Run code ──────────────────────────────────────────────────────────────────
-async def run_code(code: str, language: str = "python") -> dict:
+async def run_code(code, language="python"):
     if language.lower() != "python":
-        return {"output": "JavaScript/HTML/CSS runs in the browser preview panel.", "error": "", "code": code, "language": language}
+        return {
+            "output": "JavaScript/HTML/CSS runs in the browser preview.",
+            "error": "", "code": code, "language": language
+        }
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-        f.write(code); fname = f.name
+        f.write(code)
+        fname = f.name
     try:
-        res = subprocess.run([sys.executable, fname], capture_output=True, text=True, timeout=15)
-        return {"output": res.stdout[:3000], "error": res.stderr[:500], "code": code, "language": language}
+        res = subprocess.run(
+            [sys.executable, fname],
+            capture_output=True, text=True, timeout=15
+        )
+        return {
+            "output": res.stdout[:3000],
+            "error": res.stderr[:500],
+            "code": code,
+            "language": language
+        }
     except subprocess.TimeoutExpired:
-        return {"output": "", "error": "Timed out (15s limit)", "code": code, "language": language}
+        return {"output": "", "error": "Timed out (15s)", "code": code, "language": language}
     except Exception as e:
         return {"output": "", "error": str(e), "code": code, "language": language}
     finally:
-        try: os.unlink(fname)
-        except: pass
+        try:
+            os.unlink(fname)
+        except Exception:
+            pass
+
 
 # ── Intent detection ──────────────────────────────────────────────────────────
-def detect_intent(msg: str) -> str:
+def detect_intent(msg):
     m = msg.lower()
-    if re.search(r'https?://', m): return "url"
-    if any(w in m for w in ["search","latest","news","today","current","recent","2025","2026",
-        "price","weather","who is","where is","when did","how much","stock","score","winner",
-        "result","what happened","tell me about today","right now","this week","this month"]): return "search"
-    if any(w in m for w in ["draw","generate image","create image","make image","picture of",
-        "photo of","logo","banner","illustration","show me a","visualise","design image"]): return "image"
+    if re.search(r'https?://', m):
+        return "url"
+    search_words = [
+        "search", "latest", "news", "today", "current", "recent",
+        "2025", "2026", "price", "weather", "who is", "where is",
+        "when did", "how much", "stock", "score", "winner", "result",
+        "what happened", "right now", "this week", "this month"
+    ]
+    if any(w in m for w in search_words):
+        return "search"
+    image_words = [
+        "draw", "generate image", "create image", "make image",
+        "picture of", "photo of", "logo", "banner", "illustration",
+        "show me a", "visualise", "design image"
+    ]
+    if any(w in m for w in image_words):
+        return "image"
     return "general"
 
-# ── Build search context string ───────────────────────────────────────────────
-def build_search_context(sr: dict, query: str) -> tuple[str, list]:
-    sources = [{"title": r["title"], "url": r["url"]} for r in sr.get("results", []) if r.get("url")]
-    ctx = f"LIVE WEB SEARCH RESULTS for '{query}':\n"
+
+# ── Build search context ──────────────────────────────────────────────────────
+def build_search_context(sr, query):
+    sources = [
+        {"title": r["title"], "url": r["url"]}
+        for r in sr.get("results", [])
+        if r.get("url")
+    ]
+    ctx = "LIVE WEB SEARCH RESULTS for '{}':\n".format(query)
     if sr.get("answer"):
-        ctx += f"Quick answer: {sr['answer']}\n\n"
+        ctx += "Quick answer: {}\n\n".format(sr["answer"])
     for i, r in enumerate(sr.get("results", [])[:5], 1):
-        ctx += f"[{i}] {r['title']}\n{r['content']}\nURL: {r['url']}\n\n"
-    ctx += "Answer the question using these search results. Cite sources by number [1] [2] etc. Be specific and accurate."
+        ctx += "[{}] {}\n{}\nURL: {}\n\n".format(
+            i, r["title"], r["content"], r["url"]
+        )
+    ctx += (
+        "Answer the question using these search results. "
+        "Cite sources by number [1] [2] etc. Be specific and accurate. "
+        "Do NOT output any tool call JSON - answer directly."
+    )
     return ctx, sources
 
+
 # ── Main streaming function ───────────────────────────────────────────────────
-async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
+async def stream_agentic(question, user_id, context_docs=""):
     history = get_history(user_id)
     system  = SYSTEM
     sources = []
 
     if context_docs:
-        system += f"\n\nUSER'S UPLOADED DOCUMENT CONTEXT:\n{context_docs}\nUse this when relevant."
+        system = system + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs + "\nUse this when relevant."
 
-    # ── Pre-routing ────────────────────────────────────────────────────────────
+    # Pre-routing
     intent = detect_intent(question)
 
     if intent == "url":
@@ -223,9 +288,14 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
             yield "data: [STATUS]Reading that page...\n\n"
             result = await read_url(url_match.group())
             if result.get("content"):
-                system += f"\n\nPAGE CONTENT from {result['url']}:\n{result['content']}\nAnswer the user's question about this page. Do NOT output any tool JSON."
+                system = (
+                    system
+                    + "\n\nPAGE CONTENT from " + result["url"] + ":\n"
+                    + result["content"]
+                    + "\n\nAnswer the user's question about this page. Do NOT output tool JSON."
+                )
             else:
-                yield f"data: Could not read that page. {result.get('error','')}\n\n"
+                yield "data: Could not read that page.\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
@@ -234,66 +304,60 @@ async def stream_agentic(question: str, user_id: str, context_docs: str = ""):
         sr = await search_web(question)
         if sr.get("results") or sr.get("answer"):
             ctx, sources = build_search_context(sr, question)
-            system += f"\n\n{ctx}"
-            system += "\n\nYou already have live search results above. Answer directly. Do NOT output any {tool} JSON."
+            system = system + "\n\n" + ctx
 
     elif intent == "image":
         yield "data: [STATUS]Generating image...\n\n"
         img = await generate_image(question)
         if img.get("image_b64"):
-            yield f"data: [IMAGE]{img['image_b64']}\n\n"
+            yield "data: [IMAGE]" + img["image_b64"] + "\n\n"
             yield "data: Here's the image I generated for you.\n\n"
             add_history(user_id, "user", question)
-            add_history(user_id, "assistant", f"[Generated image: {question}]")
+            add_history(user_id, "assistant", "[Generated image]")
             yield "data: [DONE]\n\n"
             return
         else:
-            yield f"data: Image generation failed: {img.get('error')}. Let me describe it instead.\n\n"
-            system += "
+            err = img.get("error", "Image generation failed")
+            yield "data: " + err + " Let me describe it instead.\n\n"
 
-Do NOT output any tool call JSON. Answer directly."
-
-    # ── Stream LLM ────────────────────────────────────────────────────────────
+    # Stream LLM
     messages = [{"role": "system", "content": system}]
     messages.extend(history[-12:])
     messages.append({"role": "user", "content": question})
 
-    full      = ""
-    tool_buf  = ""
-    in_tool   = False
-    sent_buf  = ""  # track what we've already sent to avoid re-sending
+    full     = ""
+    tool_buf = ""
+    in_tool  = False
 
     try:
         stream = groq_client.chat.completions.create(
-            model=MODEL, messages=messages,
-            temperature=0.7, max_tokens=3000, stream=True
+            model=MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=3000,
+            stream=True
         )
+
         for chunk in stream:
             token = chunk.choices[0].delta.content or ""
-            if not token: continue
+            if not token:
+                continue
             full += token
 
-            # Detect start of tool JSON — buffer everything from { onwards
-            if not in_tool and ('{"tool"' in full or ('{' in full and '"tool"' in full)):
-                # Find where the tool JSON starts
-                for marker in ['{"tool"', '{ "tool"']:
-                    idx = full.find(marker)
-                    if idx >= 0:
-                        # Send everything before the tool call
-                        before = full[:idx].strip()
-                        unsent = before[len(sent_buf):]
-                        if unsent.strip():
-                            yield f"data: {unsent}\n\n"
-                        tool_buf = full[idx:]
-                        in_tool  = True
-                        break
-                if in_tool:
-                    continue
+            # Detect tool JSON starting
+            if not in_tool and '{"tool"' in full:
+                idx = full.find('{"tool"')
+                before = full[:idx].strip()
+                if before:
+                    yield "data: " + before + "\n\n"
+                tool_buf = full[idx:]
+                in_tool = True
+                continue
 
             if in_tool:
                 tool_buf += token
                 try:
-                    tc = json.loads(tool_buf.strip())
+                    tc   = json.loads(tool_buf.strip())
                     in_tool  = False
                     tool_buf = ""
                     tool     = tc.get("tool", "")
@@ -303,100 +367,123 @@ Do NOT output any tool call JSON. Answer directly."
                         sr2 = await search_web(tc.get("query", question))
                         ctx2, src2 = build_search_context(sr2, tc.get("query", question))
                         sources.extend(src2)
-                        msgs2 = [{"role": "system", "content": SYSTEM + f"\n\n{ctx2}"}]
+                        msgs2 = [{"role": "system", "content": SYSTEM + "\n\n" + ctx2}]
                         msgs2.extend(history[-6:])
                         msgs2.append({"role": "user", "content": question})
-                        s2 = groq_client.chat.completions.create(model=MODEL, messages=msgs2, temperature=0.6, max_tokens=2000, stream=True)
+                        s2 = groq_client.chat.completions.create(
+                            model=MODEL, messages=msgs2,
+                            temperature=0.6, max_tokens=2000, stream=True
+                        )
                         for c2 in s2:
                             t2 = c2.choices[0].delta.content or ""
-                            if t2: yield f"data: {t2}\n\n"
+                            if t2:
+                                yield "data: " + t2 + "\n\n"
 
                     elif tool == "read_url":
                         yield "data: [STATUS]Reading that page...\n\n"
                         ur = await read_url(tc.get("url", ""))
                         if ur.get("content"):
-                            msgs3 = [{"role": "system", "content": SYSTEM + f"\n\nPAGE CONTENT:\n{ur['content']}\nAnswer the user's question."}]
+                            page_sys = (
+                                SYSTEM + "\n\nPAGE CONTENT:\n"
+                                + ur["content"]
+                                + "\n\nAnswer the user's question. Do NOT output tool JSON."
+                            )
+                            msgs3 = [{"role": "system", "content": page_sys}]
                             msgs3.extend(history[-6:])
                             msgs3.append({"role": "user", "content": question})
-                            s3 = groq_client.chat.completions.create(model=MODEL, messages=msgs3, temperature=0.6, max_tokens=2000, stream=True)
+                            s3 = groq_client.chat.completions.create(
+                                model=MODEL, messages=msgs3,
+                                temperature=0.6, max_tokens=2000, stream=True
+                            )
                             for c3 in s3:
                                 t3 = c3.choices[0].delta.content or ""
-                                if t3: yield f"data: {t3}\n\n"
+                                if t3:
+                                    yield "data: " + t3 + "\n\n"
                         else:
-                            yield f"data: Couldn't read that URL.\n\n"
+                            yield "data: Could not read that URL.\n\n"
 
                     elif tool == "generate_image":
                         yield "data: [STATUS]Generating image...\n\n"
                         img2 = await generate_image(tc.get("prompt", question))
                         if img2.get("image_b64"):
-                            yield f"data: [IMAGE]{img2['image_b64']}\n\n"
+                            yield "data: [IMAGE]" + img2["image_b64"] + "\n\n"
                             yield "data: Here's the image I generated.\n\n"
                         else:
-                            yield f"data: {img2.get('error', 'Image generation failed')}\n\n"
+                            yield "data: " + img2.get("error", "Image generation failed") + "\n\n"
 
                     elif tool == "run_code":
                         yield "data: [STATUS]Running code...\n\n"
                         cr = await run_code(tc.get("code", ""), tc.get("language", "python"))
-                        yield f"data: [CODE_RESULT]{json.dumps(cr)}\n\n"
-                        if cr.get("output"): yield f"data: Output:\n```\n{cr['output']}\n```\n\n"
-                        if cr.get("error"):  yield f"data: Error: {cr['error']}\n\n"
+                        yield "data: [CODE_RESULT]" + json.dumps(cr) + "\n\n"
+                        if cr.get("output"):
+                            yield "data: Output:\n```\n" + cr["output"] + "\n```\n\n"
+                        if cr.get("error"):
+                            yield "data: Error: " + cr["error"] + "\n\n"
 
                     elif tool == "create_file":
-                        fd = {"filename": tc.get("filename","gyana_output.txt"), "content": tc.get("content",""), "filetype": tc.get("filetype","txt")}
-                        yield f"data: [FILE]{json.dumps(fd)}\n\n"
-                        yield f"data: Created **{fd['filename']}** — click download below.\n\n"
+                        fd = {
+                            "filename": tc.get("filename", "gyana_output.txt"),
+                            "content":  tc.get("content", ""),
+                            "filetype": tc.get("filetype", "txt"),
+                        }
+                        yield "data: [FILE]" + json.dumps(fd) + "\n\n"
+                        yield "data: Created **" + fd["filename"] + "** - click download below.\n\n"
 
                 except json.JSONDecodeError:
                     pass  # JSON still building
             else:
-                yield f"data: {token}\n\n"
+                yield "data: " + token + "\n\n"
 
     except Exception as e:
-        yield f"data: [ERROR]{str(e)}\n\n"
+        yield "data: [ERROR]" + str(e) + "\n\n"
         return
 
     if sources:
-        yield f"data: [SOURCES]{json.dumps(sources)}\n\n"
+        yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
 
     add_history(user_id, "user", question)
     add_history(user_id, "assistant", full[:1500])
     yield "data: [DONE]\n\n"
 
+
 # ── Non-streaming ─────────────────────────────────────────────────────────────
-async def ask_agentic(question: str, user_id: str, context_docs: str = "") -> dict:
+async def ask_agentic(question, user_id, context_docs=""):
     history = get_history(user_id)
     system  = SYSTEM
     if context_docs:
-        system += f"\n\nDOCUMENT CONTEXT:\n{context_docs}"
+        system = system + "\n\nDOCUMENT CONTEXT:\n" + context_docs
 
     messages = [{"role": "system", "content": system}]
     messages.extend(history[-10:])
     messages.append({"role": "user", "content": question})
 
-    r      = groq_client.chat.completions.create(model=MODEL, messages=messages, temperature=0.7, max_tokens=2000)
+    r = groq_client.chat.completions.create(
+        model=MODEL, messages=messages,
+        temperature=0.7, max_tokens=2000
+    )
     answer = r.choices[0].message.content.strip()
 
     add_history(user_id, "user", question)
     add_history(user_id, "assistant", answer)
     return {"answer": answer, "sources": []}
 
+
 # ── Backward compat ───────────────────────────────────────────────────────────
-async def stream_general(question: str, user_id: str):
+async def stream_general(question, user_id):
     async for chunk in stream_agentic(question, user_id):
         yield chunk
 
-def ask_general(question: str, user_id: str) -> str:
+
+def ask_general(question, user_id):
     return asyncio.run(ask_agentic(question, user_id))["answer"]
 
-# ── RAG stubs (used by main.py if Supabase available) ─────────────────────────
-async def ingest_document(contents: bytes, filename: str, user_id: str) -> dict:
-    """Override this with your actual RAG implementation."""
+
+# ── RAG stubs ─────────────────────────────────────────────────────────────────
+async def ingest_document(contents, filename, user_id):
     return {"chunks": 0, "language": "en"}
 
-async def query_documents(question: str, user_id: str) -> str:
-    """Override this with your actual RAG implementation."""
+async def query_documents(question, user_id):
     return ""
 
-async def delete_documents(user_id: str):
-    """Override this with your actual RAG implementation."""
+async def delete_documents(user_id):
     pass
