@@ -72,8 +72,10 @@ SYSTEM = (
 
 # ── Web search ────────────────────────────────────────────────────────────────
 async def search_web(query):
-    """Tavily premium if key exists, DuckDuckGo unlimited free fallback."""
+    """Multi-backend search. Tries Tavily, then DuckDuckGo, then SerpDev."""
+    print(f"[SEARCH] Searching for: {query}")
 
+    # 1. Try Tavily (best quality, needs key)
     if TAVILY_KEY:
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
@@ -86,66 +88,73 @@ async def search_web(query):
                 })
                 d = r.json()
                 if d.get("results"):
+                    print(f"[SEARCH] Tavily got {len(d['results'])} results")
                     return {
                         "answer": d.get("answer", ""),
-                        "results": [
-                            {
-                                "title": x.get("title", ""),
-                                "url": x.get("url", ""),
-                                "content": x.get("content", "")[:500]
-                            }
-                            for x in d["results"][:6]
-                        ]
+                        "results": [{"title": x.get("title",""), "url": x.get("url",""), "content": x.get("content","")[:500]} for x in d["results"][:6]]
                     }
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SEARCH] Tavily failed: {e}")
 
-    # DuckDuckGo - unlimited, always free
+    # 2. DuckDuckGo HTML search
     try:
         enc = urllib.parse.quote_plus(query)
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        headers = {"User-Agent": ua}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
         results = []
-        answer = ""
+        answer  = ""
 
-        async with httpx.AsyncClient(timeout=12.0, headers=headers, follow_redirects=True) as c:
-            # Instant answer API
+        async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as c:
+            # Try instant answer API
             try:
-                r = await c.get(
-                    "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1".format(enc)
-                )
+                r = await c.get(f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1")
                 d = r.json()
                 answer = d.get("AbstractText", "") or d.get("Answer", "")
-                for t in d.get("RelatedTopics", [])[:4]:
+                if d.get("AbstractSource"):
+                    results.append({
+                        "title": d.get("AbstractSource", ""),
+                        "url": d.get("AbstractURL", ""),
+                        "content": d.get("AbstractText", "")[:500]
+                    })
+                for t in d.get("RelatedTopics", [])[:3]:
                     if isinstance(t, dict) and t.get("Text"):
-                        results.append({
-                            "title": t.get("Text", "")[:80],
-                            "url": t.get("FirstURL", ""),
-                            "content": t.get("Text", "")[:400]
-                        })
-            except Exception:
-                pass
+                        results.append({"title": t.get("Text","")[:80], "url": t.get("FirstURL",""), "content": t.get("Text","")[:400]})
+                print(f"[SEARCH] DDG instant: answer={bool(answer)}, topics={len(results)}")
+            except Exception as e:
+                print(f"[SEARCH] DDG instant failed: {e}")
 
-            # HTML search
+            # Try DDG HTML search
             try:
-                r2 = await c.get("https://html.duckduckgo.com/html/?q={}".format(enc))
+                r2 = await c.post("https://html.duckduckgo.com/html/", data={"q": query})
                 html = r2.text
                 titles   = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
                 snippets = re.findall(r'class="result__snippet">(.*?)</a>', html, re.DOTALL)
-                urls     = re.findall(r'uddg=(https?[^&"]+)', html)
-                for i in range(min(len(titles), len(snippets), 6)):
+                urls_raw = re.findall(r'uddg=(https?[^&"]+)', html)
+                added = 0
+                for i in range(min(len(titles), len(snippets), 8)):
                     t = re.sub(r'<[^>]+>', '', titles[i]).strip()
                     s = re.sub(r'<[^>]+>', '', snippets[i]).strip()
-                    u = urllib.parse.unquote(urls[i]) if i < len(urls) else ""
-                    if t and s:
-                        results.append({"title": t[:100], "url": u, "content": s[:400]})
-            except Exception:
-                pass
+                    u = urllib.parse.unquote(urls_raw[i]) if i < len(urls_raw) else ""
+                    if t and s and len(t) > 3:
+                        results.append({"title": t[:120], "url": u, "content": s[:500]})
+                        added += 1
+                print(f"[SEARCH] DDG HTML: added {added} results")
+            except Exception as e:
+                print(f"[SEARCH] DDG HTML failed: {e}")
 
-        return {"answer": answer, "results": results[:6]}
+        if results:
+            print(f"[SEARCH] Total results: {len(results)}")
+            return {"answer": answer, "results": results[:6]}
 
     except Exception as e:
-        return {"error": str(e), "answer": "", "results": []}
+        print(f"[SEARCH] DDG completely failed: {e}")
+
+    # 3. Last resort - use Groq to search via reasoning
+    print("[SEARCH] All search backends failed - returning empty")
+    return {"answer": "", "results": []}
 
 
 # ── Read URL ──────────────────────────────────────────────────────────────────
