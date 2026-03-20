@@ -523,25 +523,33 @@ function GuruMode({ user, onClose }) {
 
       mr.start(200);
 
-      // Silence detection — stops after 1.8s of quiet
+      // Silence detection — stops after 1.2s of quiet
+      // threshold 15 = normal room silence, good for most mics
       const sa = audioCtx.createAnalyser();
       sa.fftSize = 512;
       src.connect(sa);
       const sd = new Uint8Array(sa.frequencyBinCount);
       let silenceStart = null;
+      let hasSpoken    = false; // wait for user to actually speak first
+      const SILENCE_THRESHOLD = 15;  // raise from 8 to 15
+      const SILENCE_DURATION  = 1200; // 1.2s of silence to stop
       const check = () => {
         if (!recRef.current || recRef.current.state === "inactive") return;
         sa.getByteFrequencyData(sd);
         const avg = sd.reduce((a, b) => a + b, 0) / sd.length;
-        if (avg < 8) {
-          if (!silenceStart) silenceStart = Date.now();
-          else if (Date.now() - silenceStart > 1800) { mr.stop(); return; }
-        } else {
+        if (avg > SILENCE_THRESHOLD) {
+          hasSpoken    = true;  // user started speaking
           silenceStart = null;
+        } else if (hasSpoken) {
+          // Only count silence AFTER user has spoken
+          if (!silenceStart) silenceStart = Date.now();
+          else if (Date.now() - silenceStart > SILENCE_DURATION) {
+            mr.stop(); return;
+          }
         }
-        silenceTimer.current = setTimeout(check, 100);
+        silenceTimer.current = setTimeout(check, 80);
       };
-      setTimeout(check, 600);
+      setTimeout(check, 300); // start checking sooner
 
     } catch (e) {
       if (e.name === "NotAllowedError") {
