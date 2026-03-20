@@ -468,104 +468,46 @@ function GuruMode({ user, onClose }) {
     }
     if (phaseRef.current !== "idle") return;
     setError(""); setResponse("");
-
-    // Use browser SpeechRecognition — instant, no upload, no HuggingFace round trip
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SR) {
-      updatePhase("listening");
-      const rec = new SR();
-      rec.continuous      = true;   // keep listening until silence
-      rec.interimResults  = true;   // show interim so user knows it's working
-      rec.lang            = "en-IN";
-      rec.maxAlternatives = 1;
-
-      let finalTranscript = "";
-      let silenceTimer    = null;
-
-      rec.onresult = (e) => {
-        let interim = "";
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) {
-            finalTranscript += e.results[i][0].transcript;
-          } else {
-            interim += e.results[i][0].transcript;
-          }
-        }
-        // Reset silence timer on any speech
-        clearTimeout(silenceTimer);
-        // If we have final text, wait 1.5s of silence then process
-        if (finalTranscript) {
-          silenceTimer = setTimeout(() => {
-            rec.stop();
-          }, 1500);
-        }
-      };
-
-      rec.onerror = (e) => {
-        clearTimeout(silenceTimer);
-        if (e.error === "not-allowed") {
-          setError("Microphone access denied. Please allow microphone access.");
-        } else if (e.error === "no-speech") {
-          setError("No speech detected. Tap the orb and speak clearly.");
-        } else if (e.error === "network") {
-          setError("Network error. Check your connection.");
-        } else {
-          setError("Microphone error. Please try again.");
-        }
-        updatePhase("idle");
-      };
-
-      rec.onend = async () => {
-        clearTimeout(silenceTimer);
-        if (finalTranscript.trim()) {
-          await sendToAI(finalTranscript.trim());
-        } else {
-          if (phaseRef.current === "listening") {
-            setError("Could not hear you clearly. Please try again.");
-            updatePhase("idle");
-          }
-        }
-      };
-
-      try {
-        rec.start();
-        // Auto-stop after 10 seconds max
-        setTimeout(() => {
-          try { rec.stop(); } catch (_) {}
-        }, 10000);
-      } catch (_) {
-        updatePhase("idle");
-      }
-      return;
-    }
-
-    // Fallback: MediaRecorder if SpeechRecognition not available
     updatePhase("listening");
+
+    // MediaRecorder — works on ALL browsers including Brave
+    // Sent to Groq Whisper for fast transcription
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioCtx();
       ctxRef.current  = audioCtx;
-      const src = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
-      src.connect(analyser); analyserRef.current = analyser;
+      const src       = audioCtx.createMediaStreamSource(stream);
+      const analyser  = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      analyserRef.current = analyser;
       drawVisualiser();
+
+      // Pick best supported format
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/mp4")  ? "audio/mp4" : "";
-      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+        : MediaRecorder.isTypeSupported("audio/mp4")  ? "audio/mp4"
+        : "";
+
+      const mr     = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
       recRef.current = mr;
       const chunks = [];
+
       mr.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
       mr.onstop = async () => {
         stopVisualiser();
         stream.getTracks().forEach(t => t.stop());
         try { audioCtx.close(); } catch (_) {}
         updatePhase("thinking");
-        const blob = new Blob(chunks, { type: mime || "audio/webm" });
-        const form = new FormData();
+
+        const blobType = mime || "audio/webm";
+        const blob     = new Blob(chunks, { type: blobType });
+        const form     = new FormData();
         form.append("file", blob, mime?.includes("mp4") ? "guru.mp4" : "guru.webm");
+
         try {
           const { data } = await axios.post(`${API}/transcribe`, form, {
             headers: { "x-user-id": user?.uid || "default" },
@@ -578,22 +520,35 @@ function GuruMode({ user, onClose }) {
           updatePhase("idle");
         }
       };
+
       mr.start(200);
-      // Silence detection
-      const sa = audioCtx.createAnalyser(); sa.fftSize = 512; src.connect(sa);
+
+      // Silence detection — stops after 1.8s of quiet
+      const sa = audioCtx.createAnalyser();
+      sa.fftSize = 512;
+      src.connect(sa);
       const sd = new Uint8Array(sa.frequencyBinCount);
       let silenceStart = null;
       const check = () => {
         if (!recRef.current || recRef.current.state === "inactive") return;
         sa.getByteFrequencyData(sd);
         const avg = sd.reduce((a, b) => a + b, 0) / sd.length;
-        if (avg < 8) { if (!silenceStart) silenceStart = Date.now(); else if (Date.now() - silenceStart > 2500) { mr.stop(); return; } }
-        else silenceStart = null;
+        if (avg < 8) {
+          if (!silenceStart) silenceStart = Date.now();
+          else if (Date.now() - silenceStart > 1800) { mr.stop(); return; }
+        } else {
+          silenceStart = null;
+        }
         silenceTimer.current = setTimeout(check, 100);
       };
-      setTimeout(check, 800);
+      setTimeout(check, 600);
+
     } catch (e) {
-      setError(e.name === "NotAllowedError" ? "Microphone access denied." : e.message);
+      if (e.name === "NotAllowedError") {
+        setError("Microphone access denied. Please allow microphone in browser settings.");
+      } else {
+        setError(`Microphone error: ${e.message}`);
+      }
       updatePhase("idle");
     }
   }, [drawVisualiser, stopVisualiser, sendToAI, updatePhase, user]);
