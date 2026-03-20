@@ -468,12 +468,46 @@ function GuruMode({ user, onClose }) {
     }
     if (phaseRef.current !== "idle") return;
     setError(""); setResponse("");
-    updatePhase("listening");
 
+    // Use browser SpeechRecognition — instant, no upload, no HuggingFace round trip
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      updatePhase("listening");
+      const rec = new SR();
+      rec.continuous   = false;
+      rec.interimResults = false;
+      rec.lang         = "en-IN";
+      rec.maxAlternatives = 1;
+
+      rec.onresult = async (e) => {
+        const transcript = e.results[0]?.[0]?.transcript || "";
+        if (transcript.trim()) {
+          await sendToAI(transcript.trim());
+        } else {
+          updatePhase("idle");
+        }
+      };
+      rec.onerror = (e) => {
+        if (e.error === "not-allowed") {
+          setError("Microphone access denied.");
+        } else if (e.error !== "no-speech") {
+          setError("Could not hear you. Try again.");
+        }
+        updatePhase("idle");
+      };
+      rec.onend = () => {
+        // If still listening (no result yet), go back to idle
+        if (phaseRef.current === "listening") updatePhase("idle");
+      };
+      try { rec.start(); } catch (_) { updatePhase("idle"); }
+      return;
+    }
+
+    // Fallback: MediaRecorder if SpeechRecognition not available
+    updatePhase("listening");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioCtx();
       ctxRef.current  = audioCtx;
@@ -481,33 +515,21 @@ function GuruMode({ user, onClose }) {
       const analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
       src.connect(analyser); analyserRef.current = analyser;
       drawVisualiser();
-
-      // Mobile-safe mime type — iOS doesn't support webm
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/mp4")
-        ? "audio/mp4"
-        : "";
-
-      const mrOptions = mime ? { mimeType: mime } : {};
-      const mr = new MediaRecorder(stream, mrOptions);
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4")  ? "audio/mp4" : "";
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
       recRef.current = mr;
       const chunks = [];
       mr.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
-
       mr.onstop = async () => {
         stopVisualiser();
         stream.getTracks().forEach(t => t.stop());
         try { audioCtx.close(); } catch (_) {}
         updatePhase("thinking");
-
-        const blobType = mime || "audio/webm";
-        const blob = new Blob(chunks, { type: blobType });
+        const blob = new Blob(chunks, { type: mime || "audio/webm" });
         const form = new FormData();
         form.append("file", blob, mime?.includes("mp4") ? "guru.mp4" : "guru.webm");
-
         try {
           const { data } = await axios.post(`${API}/transcribe`, form, {
             headers: { "x-user-id": user?.uid || "default" },
@@ -515,16 +537,13 @@ function GuruMode({ user, onClose }) {
           const transcript = data.text || data.transcription || "";
           if (!transcript.trim()) { updatePhase("idle"); return; }
           await sendToAI(transcript);
-        } catch (err) {
-          console.error("Transcription error:", err);
+        } catch {
           setError("Could not transcribe. Please try again.");
           updatePhase("idle");
         }
       };
-
       mr.start(200);
-
-      // Silence detection — stops after 2.5s of quiet
+      // Silence detection
       const sa = audioCtx.createAnalyser(); sa.fftSize = 512; src.connect(sa);
       const sd = new Uint8Array(sa.frequencyBinCount);
       let silenceStart = null;
@@ -532,26 +551,16 @@ function GuruMode({ user, onClose }) {
         if (!recRef.current || recRef.current.state === "inactive") return;
         sa.getByteFrequencyData(sd);
         const avg = sd.reduce((a, b) => a + b, 0) / sd.length;
-        if (avg < 8) {
-          if (!silenceStart) silenceStart = Date.now();
-          else if (Date.now() - silenceStart > 2500) { mr.stop(); return; }
-        } else {
-          silenceStart = null;
-        }
+        if (avg < 8) { if (!silenceStart) silenceStart = Date.now(); else if (Date.now() - silenceStart > 2500) { mr.stop(); return; } }
+        else silenceStart = null;
         silenceTimer.current = setTimeout(check, 100);
       };
-      setTimeout(check, 1000);
-
+      setTimeout(check, 800);
     } catch (e) {
-      if (e.name === "NotAllowedError") {
-        setError("Microphone access denied. Please allow microphone.");
-      } else {
-        setError(`Microphone error: ${e.message}`);
-      }
+      setError(e.name === "NotAllowedError" ? "Microphone access denied." : e.message);
       updatePhase("idle");
     }
   }, [drawVisualiser, stopVisualiser, sendToAI, updatePhase, user]);
-
   // Wake word inside Guru Mode
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -749,12 +758,16 @@ function AppInner() {
   // TTS
   const stopSpeaking=useCallback(()=>{window.speechSynthesis?.cancel();setSpeaking(null);},[]);
   const speakMsg = useCallback(async (id, text) => {
+    // If already speaking this message — stop it
     if (speaking === id) { stopSpeaking(); return; }
+    // Stop any current speech first
     window.speechSynthesis?.cancel();
+    // Set speaking state immediately — prevents button flicker
+    setSpeaking(id);
     const clean = cleanForSpeech(text);
+    if (!clean) { setSpeaking(null); return; }
 
     if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
-      setSpeaking(id);
       try {
         const res = await fetch(
           `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
@@ -772,26 +785,26 @@ function AppInner() {
         const blob = await res.blob(), url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         audio.onended = () => { setSpeaking(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => setSpeaking(null);
-        await audio.play(); return;
+        audio.onerror = () => { setSpeaking(null); };
+        await audio.play();
+        return;
       } catch (err) {
-        console.warn("speakMsg ElevenLabs error:", err.message);
-        setSpeaking(null);
+        console.warn("ElevenLabs error:", err.message);
+        // Fall through to browser TTS
       }
     }
 
-    // Browser TTS fallback
-    const hasNonLatin = /[^\u0000-\u024F]/.test(clean);
-    const toSpeak = hasNonLatin ? "Add your ElevenLabs key for multilingual voice." : clean;
-    const utt = new SpeechSynthesisUtterance(toSpeak);
-    utt.rate = 0.9; utt.lang = "en-US";
+    // Browser TTS — set speaking before speak() to avoid flicker
+    const utt = new SpeechSynthesisUtterance(clean);
+    utt.rate = 0.92; utt.lang = "en-US";
     const voices = window.speechSynthesis.getVoices();
     const v = voices.find(v => v.lang.startsWith("en") &&
       (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha"))
     ) || voices.find(v => v.lang.startsWith("en"));
     if (v) utt.voice = v;
-    utt.onstart = () => setSpeaking(id);
-    utt.onend = utt.onerror = () => setSpeaking(null);
+    // onend clears state — no onstart needed since we already set it above
+    utt.onend   = () => setSpeaking(null);
+    utt.onerror = () => setSpeaking(null);
     window.speechSynthesis.speak(utt);
   }, [speaking, stopSpeaking]);
   useEffect(()=>{
