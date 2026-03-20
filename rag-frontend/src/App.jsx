@@ -474,32 +474,68 @@ function GuruMode({ user, onClose }) {
     if (SR) {
       updatePhase("listening");
       const rec = new SR();
-      rec.continuous   = false;
-      rec.interimResults = false;
-      rec.lang         = "en-IN";
+      rec.continuous      = true;   // keep listening until silence
+      rec.interimResults  = true;   // show interim so user knows it's working
+      rec.lang            = "en-IN";
       rec.maxAlternatives = 1;
 
-      rec.onresult = async (e) => {
-        const transcript = e.results[0]?.[0]?.transcript || "";
-        if (transcript.trim()) {
-          await sendToAI(transcript.trim());
-        } else {
-          updatePhase("idle");
+      let finalTranscript = "";
+      let silenceTimer    = null;
+
+      rec.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) {
+            finalTranscript += e.results[i][0].transcript;
+          } else {
+            interim += e.results[i][0].transcript;
+          }
+        }
+        // Reset silence timer on any speech
+        clearTimeout(silenceTimer);
+        // If we have final text, wait 1.5s of silence then process
+        if (finalTranscript) {
+          silenceTimer = setTimeout(() => {
+            rec.stop();
+          }, 1500);
         }
       };
+
       rec.onerror = (e) => {
+        clearTimeout(silenceTimer);
         if (e.error === "not-allowed") {
-          setError("Microphone access denied.");
-        } else if (e.error !== "no-speech") {
-          setError("Could not hear you. Try again.");
+          setError("Microphone access denied. Please allow microphone access.");
+        } else if (e.error === "no-speech") {
+          setError("No speech detected. Tap the orb and speak clearly.");
+        } else if (e.error === "network") {
+          setError("Network error. Check your connection.");
+        } else {
+          setError("Microphone error. Please try again.");
         }
         updatePhase("idle");
       };
-      rec.onend = () => {
-        // If still listening (no result yet), go back to idle
-        if (phaseRef.current === "listening") updatePhase("idle");
+
+      rec.onend = async () => {
+        clearTimeout(silenceTimer);
+        if (finalTranscript.trim()) {
+          await sendToAI(finalTranscript.trim());
+        } else {
+          if (phaseRef.current === "listening") {
+            setError("Could not hear you clearly. Please try again.");
+            updatePhase("idle");
+          }
+        }
       };
-      try { rec.start(); } catch (_) { updatePhase("idle"); }
+
+      try {
+        rec.start();
+        // Auto-stop after 10 seconds max
+        setTimeout(() => {
+          try { rec.stop(); } catch (_) {}
+        }, 10000);
+      } catch (_) {
+        updatePhase("idle");
+      }
       return;
     }
 
