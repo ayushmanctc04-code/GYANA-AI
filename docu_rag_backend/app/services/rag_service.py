@@ -321,7 +321,19 @@ async def stream_agentic(question, user_id, context_docs=""):
             yield "data: " + err + " Let me describe it instead.\n\n"
 
     # Stream LLM
-    messages = [{"role": "system", "content": system}]
+    # If we already pre-searched or pre-loaded a URL, use a clean system
+    # prompt that explicitly forbids tool JSON output
+    clean_system = system
+    if intent in ("search", "url"):
+        clean_system = system + (
+            "\n\nCRITICAL: You already have all the information you need above. "
+            "Answer the user directly in plain text. "
+            "Do NOT start with or output any JSON. "
+            "Do NOT use any tool calls. "
+            "Just answer naturally."
+        )
+
+    messages = [{"role": "system", "content": clean_system}]
     messages.extend(history[-12:])
     messages.append({"role": "user", "content": question})
 
@@ -344,14 +356,18 @@ async def stream_agentic(question, user_id, context_docs=""):
                 continue
             full += token
 
-            # Detect tool JSON starting
-            if not in_tool and '{"tool"' in full:
-                idx = full.find('{"tool"')
-                before = full[:idx].strip()
-                if before:
-                    yield "data: " + before + "\n\n"
-                tool_buf = full[idx:]
-                in_tool = True
+            # Detect tool JSON — buffer it, never stream it raw
+            if not in_tool:
+                tool_start = full.find('{"tool"')
+                if tool_start >= 0:
+                    before = full[:tool_start].strip()
+                    if before:
+                        yield "data: " + before + "\n\n"
+                    tool_buf = full[tool_start:]
+                    in_tool = True
+                    continue
+                else:
+                    yield "data: " + token + "\n\n"
                 continue
 
             if in_tool:
@@ -431,8 +447,7 @@ async def stream_agentic(question, user_id, context_docs=""):
 
                 except json.JSONDecodeError:
                     pass  # JSON still building
-            else:
-                yield "data: " + token + "\n\n"
+            # token already streamed above in the non-tool branch
 
     except Exception as e:
         yield "data: [ERROR]" + str(e) + "\n\n"

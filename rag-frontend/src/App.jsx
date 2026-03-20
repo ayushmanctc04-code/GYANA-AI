@@ -148,6 +148,8 @@ const YantraLarge = () => (
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 function MD({ text = "" }) {
+  // Strip any tool JSON that leaked into display text
+  text = text.replace(/\{"tool"[^}]*\}/g, "").replace(/\{[^}]*"tool"[^}]*\}/g, "").trim();
   if (!text) return null;
   const inline = (str, key) => {
     const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
@@ -243,23 +245,24 @@ function LoginPage() {
 // ── Text cleaner for TTS — strips ALL markdown and punctuation clutter ────────
 function cleanForSpeech(text) {
   return text
-    .replace(/\*\*(.*?)\*\*/g, "$1")          // **bold**
-    .replace(/\*(.*?)\*/g, "$1")               // *italic*
-    .replace(/_{2}(.*?)_{2}/g, "$1")           // __bold__
-    .replace(/_(.*?)_/g, "$1")                 // _italic_
-    .replace(/`{1,3}[^`]*`{1,3}/g, "")         // `code` — remove entirely
-    .replace(/#{1,6}\s+/g, "")                // ## headings
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")  // [link](url)
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")     // ![image](url)
-    .replace(/^[-*+]\s+/gm, "")               // bullet points
-    .replace(/^\d+\.\s+/gm, "")              // numbered lists
-    .replace(/^>+\s*/gm, "")                  // blockquotes
-    .replace(/[-]{2,}/g, " ")                  // -- or ---
-    .replace(/[|]/g, " ")                      // tables
-    .replace(/\n{2,}/g, ". ")                 // paragraph breaks
-    .replace(/\n/g, " ")                      // line breaks
-    .replace(/\s{2,}/g, " ")                  // extra spaces
-    .replace(/\.{2,}/g, ".")                  // multiple dots
+    .replace(/\{"tool".*?\}/gs, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/_{2}(.*?)_{2}/g, "$1")
+    .replace(/_(.*?)_/g, "$1")
+    .replace(/`{1,3}[^`]*`{1,3}/g, "")
+    .replace(/#{1,6}\s+/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/^>+\s*/gm, "")
+    .replace(/[-]{2,}/g, " ")
+    .replace(/[|]/g, " ")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\.{2,}/g, ".")
     .trim()
     .slice(0, 450);
 }
@@ -875,9 +878,10 @@ function AppInner() {
             } catch(_) {}
             continue;
           }
-          // Regular text token
+          // Regular text token — strip any tool JSON that leaked
           got = true;
-          patchMsg(aiId, m => ({text: (m.text||"") + token.replace(/\\n/g, "\n")}));
+          const cleanToken = token.replace(/\{"tool"[^}]*\}/g, "").replace(/\{[^}]*"tool"[^}]*\}/g, "");
+          if (cleanToken) patchMsg(aiId, m => ({text: (m.text||"") + cleanToken.replace(/\\n/g, "\n")}));
         }
       }
     } catch(_) {}
