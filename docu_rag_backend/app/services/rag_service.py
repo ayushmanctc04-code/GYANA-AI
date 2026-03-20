@@ -70,15 +70,23 @@ SYSTEM = (
     "Output tool calls as a single JSON line - nothing else on that line."
 )
 
-# ── Web search ────────────────────────────────────────────────────────────────
+# ── Web search ──────────────────────────────────────────────────────────────
 async def search_web(query):
-    """Multi-backend search. Tries Tavily, then DuckDuckGo, then SerpDev."""
-    print(f"[SEARCH] Searching for: {query}")
+    """
+    Multi-source search — all free and unlimited:
+    1. Tavily (if key set — best quality)
+    2. Wikipedia API (unlimited, no key, factual queries)
+    3. Serper.dev (if key set)
+    4. Groq-powered reasoning (always works — final fallback)
+    """
+    print(f"[SEARCH] Query: {query}")
+    results = []
+    answer  = ""
 
-    # 1. Try Tavily (best quality, needs key)
+    # 1. Tavily (best, needs key)
     if TAVILY_KEY:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
+            async with httpx.AsyncClient(timeout=12.0) as c:
                 r = await c.post("https://api.tavily.com/search", json={
                     "api_key": TAVILY_KEY,
                     "query": query,
@@ -88,75 +96,112 @@ async def search_web(query):
                 })
                 d = r.json()
                 if d.get("results"):
-                    print(f"[SEARCH] Tavily got {len(d['results'])} results")
+                    print(f"[SEARCH] Tavily OK: {len(d['results'])} results")
                     return {
                         "answer": d.get("answer", ""),
-                        "results": [{"title": x.get("title",""), "url": x.get("url",""), "content": x.get("content","")[:500]} for x in d["results"][:6]]
+                        "results": [
+                            {"title": x.get("title",""), "url": x.get("url",""), "content": x.get("content","")[:500]}
+                            for x in d["results"][:6]
+                        ]
                     }
         except Exception as e:
             print(f"[SEARCH] Tavily failed: {e}")
 
-    # 2. DuckDuckGo HTML search
+    # 2. Serper.dev (needs key — 2500 free/month)
+    serper_key = os.environ.get("SERPER_API_KEY", "")
+    if serper_key:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post("https://google.serper.dev/search",
+                    headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                    json={"q": query, "num": 6}
+                )
+                d = r.json()
+                organic = d.get("organic", [])
+                if organic:
+                    print(f"[SEARCH] Serper OK: {len(organic)} results")
+                    return {
+                        "answer": d.get("answerBox", {}).get("answer", ""),
+                        "results": [
+                            {"title": x.get("title",""), "url": x.get("link",""), "content": x.get("snippet","")[:500]}
+                            for x in organic[:6]
+                        ]
+                    }
+        except Exception as e:
+            print(f"[SEARCH] Serper failed: {e}")
+
+    # 3. Wikipedia API — unlimited, free, no key, always works
     try:
         enc = urllib.parse.quote_plus(query)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-        }
-        results = []
-        answer  = ""
-
-        async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as c:
-            # Try instant answer API
-            try:
-                r = await c.get(f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1")
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            # Wikipedia search
+            r = await c.get(
+                f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={enc}&format=json&srlimit=5"
+            )
+            if r.status_code == 200:
                 d = r.json()
-                answer = d.get("AbstractText", "") or d.get("Answer", "")
-                if d.get("AbstractSource"):
-                    results.append({
-                        "title": d.get("AbstractSource", ""),
-                        "url": d.get("AbstractURL", ""),
-                        "content": d.get("AbstractText", "")[:500]
-                    })
-                for t in d.get("RelatedTopics", [])[:3]:
-                    if isinstance(t, dict) and t.get("Text"):
-                        results.append({"title": t.get("Text","")[:80], "url": t.get("FirstURL",""), "content": t.get("Text","")[:400]})
-                print(f"[SEARCH] DDG instant: answer={bool(answer)}, topics={len(results)}")
-            except Exception as e:
-                print(f"[SEARCH] DDG instant failed: {e}")
+                wiki_results = d.get("query", {}).get("search", [])
+                for item in wiki_results[:4]:
+                    title   = item.get("title", "")
+                    snippet = item.get("snippet", "")
+                    # Strip HTML tags from snippet
+                    snippet = re.sub(r'<[^>]+>', '', snippet)
+                    url     = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title)}"
+                    results.append({"title": title, "url": url, "content": snippet[:400]})
 
-            # Try DDG HTML search
-            try:
-                r2 = await c.post("https://html.duckduckgo.com/html/", data={"q": query})
-                html = r2.text
-                titles   = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
-                snippets = re.findall(r'class="result__snippet">(.*?)</a>', html, re.DOTALL)
-                urls_raw = re.findall(r'uddg=(https?[^&"]+)', html)
-                added = 0
-                for i in range(min(len(titles), len(snippets), 8)):
-                    t = re.sub(r'<[^>]+>', '', titles[i]).strip()
-                    s = re.sub(r'<[^>]+>', '', snippets[i]).strip()
-                    u = urllib.parse.unquote(urls_raw[i]) if i < len(urls_raw) else ""
-                    if t and s and len(t) > 3:
-                        results.append({"title": t[:120], "url": u, "content": s[:500]})
-                        added += 1
-                print(f"[SEARCH] DDG HTML: added {added} results")
-            except Exception as e:
-                print(f"[SEARCH] DDG HTML failed: {e}")
+                # Also get full extract for top result
+                if wiki_results:
+                    top = urllib.parse.quote(wiki_results[0].get("title",""))
+                    r2 = await c.get(
+                        f"https://en.wikipedia.org/w/api.php?action=query&titles={top}&prop=extracts&exintro=1&explaintext=1&format=json"
+                    )
+                    if r2.status_code == 200:
+                        pages = r2.json().get("query", {}).get("pages", {})
+                        for page in pages.values():
+                            extract = page.get("extract", "")[:600]
+                            if extract:
+                                answer = extract
+                                if results:
+                                    results[0]["content"] = extract
 
-        if results:
-            print(f"[SEARCH] Total results: {len(results)}")
-            return {"answer": answer, "results": results[:6]}
-
+                print(f"[SEARCH] Wikipedia OK: {len(results)} results")
     except Exception as e:
-        print(f"[SEARCH] DDG completely failed: {e}")
+        print(f"[SEARCH] Wikipedia failed: {e}")
 
-    # 3. Last resort - use Groq to search via reasoning
-    print("[SEARCH] All search backends failed - returning empty")
+    if results:
+        return {"answer": answer, "results": results}
+
+    # 4. Groq-powered reasoning — always works, uses AI knowledge
+    print("[SEARCH] Using Groq knowledge fallback")
+    try:
+        today = __import__("datetime").datetime.now().strftime("%B %d, %Y")
+        r = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Today is {today}. You are a knowledgeable assistant. "
+                        "Answer questions about current events, news, and facts based on your training data. "
+                        "Be specific. If your information might be outdated, say so clearly with the approximate date of your knowledge."
+                    )
+                },
+                {"role": "user", "content": f"Give me detailed, specific information about: {query}"}
+            ],
+            temperature=0.3,
+            max_tokens=600
+        )
+        fallback_text = r.choices[0].message.content.strip()
+        print(f"[SEARCH] Groq fallback OK: {len(fallback_text)} chars")
+        return {
+            "answer": fallback_text,
+            "results": [{"title": "AI Knowledge Base", "url": "", "content": fallback_text}],
+            "_is_fallback": True
+        }
+    except Exception as e:
+        print(f"[SEARCH] Groq fallback failed: {e}")
+
     return {"answer": "", "results": []}
-
-
 # ── Read URL ──────────────────────────────────────────────────────────────────
 async def read_url(url):
     try:
@@ -259,23 +304,38 @@ def detect_intent(msg):
 
 # ── Build search context ──────────────────────────────────────────────────────
 def build_search_context(sr, query):
+    is_fallback = sr.get("_is_fallback", False)
     sources = [
         {"title": r["title"], "url": r["url"]}
         for r in sr.get("results", [])
         if r.get("url")
     ]
-    ctx = "LIVE WEB SEARCH RESULTS for '{}':\n".format(query)
-    if sr.get("answer"):
-        ctx += "Quick answer: {}\n\n".format(sr["answer"])
-    for i, r in enumerate(sr.get("results", [])[:5], 1):
-        ctx += "[{}] {}\n{}\nURL: {}\n\n".format(
-            i, r["title"], r["content"], r["url"]
+
+    if is_fallback:
+        ctx = (
+            "KNOWLEDGE BASE RESULTS for '{}' (Note: this is from AI training data, "
+            "may not reflect very recent events):\n\n".format(query)
         )
-    ctx += (
-        "Answer the question using these search results. "
-        "Cite sources by number [1] [2] etc. Be specific and accurate. "
-        "Do NOT output any tool call JSON - answer directly."
-    )
+        ctx += sr.get("answer", "") + "\n\n"
+        ctx += (
+            "Answer the question based on this information. "
+            "Be transparent that this comes from training data and mention the approximate "
+            "date range of your knowledge if relevant. "
+            "Do NOT output any tool JSON."
+        )
+    else:
+        ctx = "LIVE SEARCH RESULTS for '{}':\n".format(query)
+        if sr.get("answer"):
+            ctx += "Summary: {}\n\n".format(sr["answer"])
+        for i, r in enumerate(sr.get("results", [])[:5], 1):
+            ctx += "[{}] {}\n{}\nURL: {}\n\n".format(
+                i, r["title"], r["content"], r["url"]
+            )
+        ctx += (
+            "Answer using these search results. "
+            "Cite sources by number [1] [2] etc. Be specific and accurate. "
+            "Do NOT output any tool JSON - answer directly."
+        )
     return ctx, sources
 
 
