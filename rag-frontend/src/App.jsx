@@ -509,14 +509,29 @@ function GuruMode({ user, onClose }) {
         form.append("file", blob, mime?.includes("mp4") ? "guru.mp4" : "guru.webm");
 
         try {
+          // Wake up HuggingFace Space if sleeping
+          try { await axios.get(`${API}/health`, { timeout: 8000 }); } catch (_) {}
+
           const { data } = await axios.post(`${API}/transcribe`, form, {
             headers: { "x-user-id": user?.uid || "default" },
+            timeout: 30000, // 30s timeout for transcription
           });
           const transcript = data.text || data.transcription || "";
-          if (!transcript.trim()) { updatePhase("idle"); return; }
+          if (!transcript.trim()) {
+            setError("Could not hear speech. Speak clearly and try again.");
+            updatePhase("idle");
+            return;
+          }
           await sendToAI(transcript);
-        } catch {
-          setError("Could not transcribe. Please try again.");
+        } catch (err) {
+          console.error("Transcribe error:", err);
+          if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
+            setError("Server is waking up. Please try again in 10 seconds.");
+          } else if (err.response?.status === 500) {
+            setError("Transcription failed. Try speaking louder and clearer.");
+          } else {
+            setError("Connection error. Check your internet and try again.");
+          }
           updatePhase("idle");
         }
       };
