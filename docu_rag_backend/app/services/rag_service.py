@@ -330,6 +330,74 @@ async def stream_general(question, user_id):
 def ask_general(question, user_id):
     return asyncio.run(ask_agentic(question, user_id))["answer"]
 
-async def ingest_document(contents, filename, user_id): return {"chunks":0,"language":"en"}
-async def query_documents(question, user_id): return ""
-async def delete_documents(user_id): pass
+# ── Real RAG using existing services ─────────────────────────────────────────
+import tempfile
+import pathlib
+
+try:
+    from app.services.document_service import extract_text
+    from app.services.vector_store import add_documents, search_documents, clear_store
+    RAG_READY = True
+    print("[RAG] Services loaded OK")
+except ImportError as e:
+    RAG_READY = False
+    print(f"[RAG] Import failed: {e}")
+
+
+async def ingest_document(contents, filename, user_id):
+    if not RAG_READY:
+        return {"chunks": 0, "language": "en"}
+    try:
+        suffix = pathlib.Path(filename).suffix or ".txt"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+        text = extract_text(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        if not text.strip():
+            return {"chunks": 0, "language": "en"}
+        lang = "en"
+        try:
+            from langdetect import detect
+            lang = detect(text[:500])
+        except Exception:
+            pass
+        chunks = add_documents(text, source=filename, user_id=user_id)
+        print(f"[RAG] Ingested {filename}: {chunks} chunks")
+        return {"chunks": chunks, "language": lang}
+    except Exception as e:
+        print(f"[RAG] Ingest error: {e}")
+        return {"chunks": 0, "language": "en"}
+
+
+async def query_documents(question, user_id):
+    if not RAG_READY:
+        return ""
+    try:
+        results = search_documents(question, top_k=5, user_id=user_id)
+        if not results:
+            return ""
+        parts = []
+        for r in results:
+            src  = r.get("source", "document")
+            text = r.get("text", r.get("content", ""))
+            parts.append("[From: " + src + "]\n" + text)
+        context = "\n\n".join(parts)
+        print("[RAG] Found " + str(len(results)) + " chunks for: " + question[:50])
+        return context
+    except Exception as e:
+        print(f"[RAG] Query error: {e}")
+        return ""
+
+
+async def delete_documents(user_id):
+    if not RAG_READY:
+        return
+    try:
+        clear_store(user_id=user_id)
+        print(f"[RAG] Cleared for {user_id}")
+    except Exception as e:
+        print(f"[RAG] Delete error: {e}")
