@@ -349,13 +349,13 @@ function GuruMode({ user, onClose }) {
     animFrameRef.current = null;
   }, []);
 
-  // ── ElevenLabs speak ──────────────────────────────────────────────────────
+  // ── Universal TTS — works on ALL platforms, free forever ─────────────────
   const speakText = useCallback(async (text) => {
     updatePhase("speaking");
     const clean = cleanForSpeech(text);
-    console.log("[Gyana TTS] clean text:", clean);
-    console.log("[Gyana TTS] key present:", !!ELEVEN_API_KEY, "voice:", !!ELEVEN_VOICE_ID);
+    if (!clean) { updatePhase("idle"); return; }
 
+    // Try ElevenLabs first if key available
     if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
       try {
         const res = await fetch(
@@ -366,48 +366,87 @@ function GuruMode({ user, onClose }) {
             body: JSON.stringify({
               text: clean,
               model_id: "eleven_multilingual_v2",
-              voice_settings: {
-                stability: 0.5,
-                similarity_boost: 0.85,
-                style: 0.2,
-                use_speaker_boost: true,
-              },
+              voice_settings: { stability: 0.5, similarity_boost: 0.85, style: 0.2, use_speaker_boost: true },
             }),
           }
         );
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`ElevenLabs ${res.status}: ${errText}`);
-        }
+        if (!res.ok) throw new Error(`ElevenLabs ${res.status}`);
         const blob = await res.blob();
         const url  = URL.createObjectURL(blob);
         if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
         audioRef.current = new Audio(url);
         audioRef.current.onended = () => { updatePhase("idle"); URL.revokeObjectURL(url); };
-        audioRef.current.onerror = (e) => { console.error("Audio error", e); updatePhase("idle"); };
+        audioRef.current.onerror = () => updatePhase("idle");
         await audioRef.current.play();
         return;
-      } catch (err) {
-        console.warn("ElevenLabs error:", err.message);
-        setError(`Voice error: ${err.message}`);
-      }
+      } catch (_) {}
     }
 
-    // Browser TTS fallback — English only, decent quality
-    const hasNonLatin = /[^\u0000-\u024F]/.test(clean);
-    const toSpeak = hasNonLatin
-      ? "I heard you. Add your ElevenLabs key for multilingual voice."
-      : clean;
+    // Universal browser TTS — free, works on iOS/Android/Windows/Mac/Linux
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(toSpeak);
-    utt.rate = 0.9; utt.pitch = 1.0; utt.lang = "en-US";
-    const voices = window.speechSynthesis.getVoices();
-    const v = voices.find(v => v.lang.startsWith("en") &&
-      (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha"))
-    ) || voices.find(v => v.lang.startsWith("en"));
-    if (v) utt.voice = v;
-    utt.onend = utt.onerror = () => updatePhase("idle");
+
+    // Wait for voices to load (needed on mobile)
+    const getVoices = () => new Promise(resolve => {
+      const v = window.speechSynthesis.getVoices();
+      if (v.length > 0) { resolve(v); return; }
+      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
+      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
+    });
+
+    const voices = await getVoices();
+
+    // Priority list — best human-sounding voices per platform
+    const preferred = [
+      // Microsoft (Windows/Edge) — best quality
+      v => v.name.includes("Microsoft Aria"),
+      v => v.name.includes("Microsoft Jenny"),
+      v => v.name.includes("Microsoft Ravi"),   // Indian English
+      v => v.name.includes("Microsoft Zira"),
+      v => v.name.includes("Microsoft David"),
+      // Apple (Mac/iOS) — excellent quality
+      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
+      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
+      v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
+      v => v.name.includes("Moira")    && v.lang.startsWith("en"),
+      // Google (Android/Chrome) — good quality
+      v => v.name.includes("Google US English"),
+      v => v.name.includes("Google UK English Female"),
+      v => v.name.includes("Google UK English Male"),
+      // Generic English fallbacks
+      v => v.lang === "en-US" && v.localService,
+      v => v.lang === "en-GB" && v.localService,
+      v => v.lang.startsWith("en") && v.localService,
+      v => v.lang.startsWith("en"),
+    ];
+
+    let selectedVoice = null;
+    for (const matcher of preferred) {
+      const found = voices.find(matcher);
+      if (found) { selectedVoice = found; break; }
+    }
+
+    const utt      = new SpeechSynthesisUtterance(clean);
+    utt.lang       = "en-US";
+    utt.rate       = 0.92;
+    utt.pitch      = 1.0;
+    utt.volume     = 1.0;
+    if (selectedVoice) utt.voice = selectedVoice;
+
+    utt.onend      = () => updatePhase("idle");
+    utt.onerror    = () => updatePhase("idle");
+
+    // iOS Safari fix — must call speak() in response to user gesture
+    // We're already in a tap handler chain so this should work
     window.speechSynthesis.speak(utt);
+
+    // Chrome bug fix — speech sometimes stops mid-sentence
+    // Keep it alive with a periodic resume
+    const keepAlive = setInterval(() => {
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    }, 5000);
+    utt.onend = () => { clearInterval(keepAlive); updatePhase("idle"); };
+    utt.onerror = () => { clearInterval(keepAlive); updatePhase("idle"); };
+
   }, [updatePhase]);
 
   // ── Send to AI — uses ref for history so no stale closure ──────────────────
@@ -772,15 +811,13 @@ function AppInner() {
   // TTS
   const stopSpeaking=useCallback(()=>{window.speechSynthesis?.cancel();setSpeaking(null);},[]);
   const speakMsg = useCallback(async (id, text) => {
-    // If already speaking this message — stop it
     if (speaking === id) { stopSpeaking(); return; }
-    // Stop any current speech first
     window.speechSynthesis?.cancel();
-    // Set speaking state immediately — prevents button flicker
-    setSpeaking(id);
+    setSpeaking(id); // set immediately — prevents flicker
     const clean = cleanForSpeech(text);
     if (!clean) { setSpeaking(null); return; }
 
+    // Try ElevenLabs if available
     if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
       try {
         const res = await fetch(
@@ -795,30 +832,45 @@ function AppInner() {
             }),
           }
         );
-        if (!res.ok) throw new Error(`ElevenLabs ${res.status}`);
+        if (!res.ok) throw new Error();
         const blob = await res.blob(), url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         audio.onended = () => { setSpeaking(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => { setSpeaking(null); };
-        await audio.play();
-        return;
-      } catch (err) {
-        console.warn("ElevenLabs error:", err.message);
-        // Fall through to browser TTS
-      }
+        audio.onerror = () => setSpeaking(null);
+        await audio.play(); return;
+      } catch (_) {}
     }
 
-    // Browser TTS — set speaking before speak() to avoid flicker
+    // Universal TTS — works on all platforms
+    const getVoices = () => new Promise(resolve => {
+      const v = window.speechSynthesis.getVoices();
+      if (v.length > 0) { resolve(v); return; }
+      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
+      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
+    });
+    const voices = await getVoices();
+    const preferred = [
+      v => v.name.includes("Microsoft Aria"),
+      v => v.name.includes("Microsoft Jenny"),
+      v => v.name.includes("Microsoft Ravi"),
+      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
+      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
+      v => v.name.includes("Google US English"),
+      v => v.name.includes("Google UK English Female"),
+      v => v.lang === "en-US" && v.localService,
+      v => v.lang.startsWith("en") && v.localService,
+      v => v.lang.startsWith("en"),
+    ];
+    let voice = null;
+    for (const m of preferred) { voice = voices.find(m); if (voice) break; }
     const utt = new SpeechSynthesisUtterance(clean);
-    utt.rate = 0.92; utt.lang = "en-US";
-    const voices = window.speechSynthesis.getVoices();
-    const v = voices.find(v => v.lang.startsWith("en") &&
-      (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha"))
-    ) || voices.find(v => v.lang.startsWith("en"));
-    if (v) utt.voice = v;
-    // onend clears state — no onstart needed since we already set it above
-    utt.onend   = () => setSpeaking(null);
-    utt.onerror = () => setSpeaking(null);
+    utt.lang = "en-US"; utt.rate = 0.92; utt.pitch = 1.0; utt.volume = 1.0;
+    if (voice) utt.voice = voice;
+    const keepAlive = setInterval(() => {
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    }, 5000);
+    utt.onend   = () => { clearInterval(keepAlive); setSpeaking(null); };
+    utt.onerror = () => { clearInterval(keepAlive); setSpeaking(null); };
     window.speechSynthesis.speak(utt);
   }, [speaking, stopSpeaking]);
   useEffect(()=>{
