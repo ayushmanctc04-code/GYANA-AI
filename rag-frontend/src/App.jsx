@@ -350,6 +350,63 @@ function GuruMode({ user, onClose }) {
   }, []);
 
   // ── Universal TTS — works on ALL platforms, free forever ─────────────────
+  const getBestVoice = useCallback(async () => {
+    const getVoices = () => new Promise(resolve => {
+      const v = window.speechSynthesis.getVoices();
+      if (v.length > 0) { resolve(v); return; }
+      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
+      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1500);
+    });
+    const voices = await getVoices();
+    const preferred = [
+      v => v.name === "Microsoft Aria Online (Natural) - English (United States)",
+      v => v.name.includes("Microsoft Aria"),
+      v => v.name.includes("Microsoft Jenny"),
+      v => v.name.includes("Microsoft Ravi"),
+      v => v.name.includes("Microsoft Zira"),
+      v => v.name.includes("Microsoft David"),
+      v => v.name === "Samantha" && v.lang.startsWith("en"),
+      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
+      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
+      v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
+      v => v.name.includes("Google US English"),
+      v => v.name.includes("Google UK English Female"),
+      v => v.lang === "en-US" && v.localService,
+      v => v.lang.startsWith("en") && v.localService,
+      v => v.lang.startsWith("en"),
+    ];
+    for (const m of preferred) {
+      const found = voices.find(m);
+      if (found) return found;
+    }
+    return null;
+  }, []);
+
+  const speakWithTTS = useCallback(async (clean, onDone) => {
+    window.speechSynthesis.cancel();
+    const voice = await getBestVoice();
+
+    // Split into sentences to avoid Chrome 15s cutoff bug
+    const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
+    let idx = 0;
+
+    const speakNext = () => {
+      if (idx >= sentences.length) { onDone(); return; }
+      const sentence = sentences[idx++].trim();
+      if (!sentence) { speakNext(); return; }
+      const utt = new SpeechSynthesisUtterance(sentence);
+      utt.lang   = "en-US";
+      utt.rate   = 0.92;
+      utt.pitch  = 1.0;
+      utt.volume = 1.0;
+      if (voice) utt.voice = voice;
+      utt.onend   = speakNext;
+      utt.onerror = onDone;
+      window.speechSynthesis.speak(utt);
+    };
+    speakNext();
+  }, [getBestVoice]);
+
   const speakText = useCallback(async (text) => {
     updatePhase("speaking");
     const clean = cleanForSpeech(text);
@@ -370,7 +427,7 @@ function GuruMode({ user, onClose }) {
             }),
           }
         );
-        if (!res.ok) throw new Error(`ElevenLabs ${res.status}`);
+        if (!res.ok) throw new Error();
         const blob = await res.blob();
         const url  = URL.createObjectURL(blob);
         if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
@@ -382,72 +439,9 @@ function GuruMode({ user, onClose }) {
       } catch (_) {}
     }
 
-    // Universal browser TTS — free, works on iOS/Android/Windows/Mac/Linux
-    window.speechSynthesis.cancel();
-
-    // Wait for voices to load (needed on mobile)
-    const getVoices = () => new Promise(resolve => {
-      const v = window.speechSynthesis.getVoices();
-      if (v.length > 0) { resolve(v); return; }
-      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
-      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
-    });
-
-    const voices = await getVoices();
-
-    // Priority list — best human-sounding voices per platform
-    const preferred = [
-      // Microsoft (Windows/Edge) — best quality
-      v => v.name.includes("Microsoft Aria"),
-      v => v.name.includes("Microsoft Jenny"),
-      v => v.name.includes("Microsoft Ravi"),   // Indian English
-      v => v.name.includes("Microsoft Zira"),
-      v => v.name.includes("Microsoft David"),
-      // Apple (Mac/iOS) — excellent quality
-      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
-      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
-      v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
-      v => v.name.includes("Moira")    && v.lang.startsWith("en"),
-      // Google (Android/Chrome) — good quality
-      v => v.name.includes("Google US English"),
-      v => v.name.includes("Google UK English Female"),
-      v => v.name.includes("Google UK English Male"),
-      // Generic English fallbacks
-      v => v.lang === "en-US" && v.localService,
-      v => v.lang === "en-GB" && v.localService,
-      v => v.lang.startsWith("en") && v.localService,
-      v => v.lang.startsWith("en"),
-    ];
-
-    let selectedVoice = null;
-    for (const matcher of preferred) {
-      const found = voices.find(matcher);
-      if (found) { selectedVoice = found; break; }
-    }
-
-    const utt      = new SpeechSynthesisUtterance(clean);
-    utt.lang       = "en-US";
-    utt.rate       = 0.92;
-    utt.pitch      = 1.0;
-    utt.volume     = 1.0;
-    if (selectedVoice) utt.voice = selectedVoice;
-
-    utt.onend      = () => updatePhase("idle");
-    utt.onerror    = () => updatePhase("idle");
-
-    // iOS Safari fix — must call speak() in response to user gesture
-    // We're already in a tap handler chain so this should work
-    window.speechSynthesis.speak(utt);
-
-    // Chrome bug fix — speech sometimes stops mid-sentence
-    // Keep it alive with a periodic resume
-    const keepAlive = setInterval(() => {
-      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-    }, 5000);
-    utt.onend = () => { clearInterval(keepAlive); updatePhase("idle"); };
-    utt.onerror = () => { clearInterval(keepAlive); updatePhase("idle"); };
-
-  }, [updatePhase]);
+    // Universal browser TTS — sentence by sentence to avoid Chrome cutoff
+    await speakWithTTS(clean, () => updatePhase("idle"));
+  }, [updatePhase, speakWithTTS]);
 
   // ── Send to AI — uses ref for history so no stale closure ──────────────────
   const sendToAI = useCallback(async (transcript) => {
@@ -841,38 +835,9 @@ function AppInner() {
       } catch (_) {}
     }
 
-    // Universal TTS — works on all platforms
-    const getVoices = () => new Promise(resolve => {
-      const v = window.speechSynthesis.getVoices();
-      if (v.length > 0) { resolve(v); return; }
-      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
-      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1000);
-    });
-    const voices = await getVoices();
-    const preferred = [
-      v => v.name.includes("Microsoft Aria"),
-      v => v.name.includes("Microsoft Jenny"),
-      v => v.name.includes("Microsoft Ravi"),
-      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
-      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
-      v => v.name.includes("Google US English"),
-      v => v.name.includes("Google UK English Female"),
-      v => v.lang === "en-US" && v.localService,
-      v => v.lang.startsWith("en") && v.localService,
-      v => v.lang.startsWith("en"),
-    ];
-    let voice = null;
-    for (const m of preferred) { voice = voices.find(m); if (voice) break; }
-    const utt = new SpeechSynthesisUtterance(clean);
-    utt.lang = "en-US"; utt.rate = 0.92; utt.pitch = 1.0; utt.volume = 1.0;
-    if (voice) utt.voice = voice;
-    const keepAlive = setInterval(() => {
-      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-    }, 5000);
-    utt.onend   = () => { clearInterval(keepAlive); setSpeaking(null); };
-    utt.onerror = () => { clearInterval(keepAlive); setSpeaking(null); };
-    window.speechSynthesis.speak(utt);
-  }, [speaking, stopSpeaking]);
+    // Universal TTS — sentence by sentence, no cutoff
+    await speakWithTTS(clean, () => setSpeaking(null));
+  }, [speaking, stopSpeaking, speakWithTTS]);
   useEffect(()=>{
     const last=msgs[msgs.length-1];
     if(autoSpeak&&last?.role==="ai"&&!last?.streaming&&last?.text&&!last?.error) speakMsg(last.id,last.text);
