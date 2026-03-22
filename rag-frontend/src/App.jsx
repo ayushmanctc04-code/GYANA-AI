@@ -267,6 +267,61 @@ function cleanForSpeech(text) {
     .slice(0, 450);
 }
 
+// ── Universal TTS helpers — available to all components ──────────────────────
+async function getBestVoice() {
+  const getVoices = () => new Promise(resolve => {
+    const v = window.speechSynthesis.getVoices();
+    if (v.length > 0) { resolve(v); return; }
+    window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
+    setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1500);
+  });
+  const voices = await getVoices();
+  const preferred = [
+    v => v.name === "Microsoft Aria Online (Natural) - English (United States)",
+    v => v.name.includes("Microsoft Aria"),
+    v => v.name.includes("Microsoft Jenny"),
+    v => v.name.includes("Microsoft Ravi"),
+    v => v.name.includes("Microsoft Zira"),
+    v => v.name.includes("Microsoft David"),
+    v => v.name === "Samantha" && v.lang.startsWith("en"),
+    v => v.name.includes("Samantha") && v.lang.startsWith("en"),
+    v => v.name.includes("Karen")    && v.lang.startsWith("en"),
+    v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
+    v => v.name.includes("Google US English"),
+    v => v.name.includes("Google UK English Female"),
+    v => v.lang === "en-US" && v.localService,
+    v => v.lang.startsWith("en") && v.localService,
+    v => v.lang.startsWith("en"),
+  ];
+  for (const m of preferred) {
+    const found = voices.find(m);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function speakWithTTS(clean, onDone) {
+  window.speechSynthesis.cancel();
+  const voice = await getBestVoice();
+  const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
+  let idx = 0;
+  const speakNext = () => {
+    if (idx >= sentences.length) { onDone(); return; }
+    const sentence = sentences[idx++].trim();
+    if (!sentence) { speakNext(); return; }
+    const utt    = new SpeechSynthesisUtterance(sentence);
+    utt.lang     = "en-US";
+    utt.rate     = 0.92;
+    utt.pitch    = 1.0;
+    utt.volume   = 1.0;
+    if (voice) utt.voice = voice;
+    utt.onend    = speakNext;
+    utt.onerror  = onDone;
+    window.speechSynthesis.speak(utt);
+  };
+  speakNext();
+}
+
 // ── Guru Mode Overlay ─────────────────────────────────────────────────────────
 function GuruMode({ user, onClose }) {
   const [phase,    setPhase]    = useState("idle");
@@ -350,62 +405,6 @@ function GuruMode({ user, onClose }) {
   }, []);
 
   // ── Universal TTS — works on ALL platforms, free forever ─────────────────
-  const getBestVoice = useCallback(async () => {
-    const getVoices = () => new Promise(resolve => {
-      const v = window.speechSynthesis.getVoices();
-      if (v.length > 0) { resolve(v); return; }
-      window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
-      setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1500);
-    });
-    const voices = await getVoices();
-    const preferred = [
-      v => v.name === "Microsoft Aria Online (Natural) - English (United States)",
-      v => v.name.includes("Microsoft Aria"),
-      v => v.name.includes("Microsoft Jenny"),
-      v => v.name.includes("Microsoft Ravi"),
-      v => v.name.includes("Microsoft Zira"),
-      v => v.name.includes("Microsoft David"),
-      v => v.name === "Samantha" && v.lang.startsWith("en"),
-      v => v.name.includes("Samantha") && v.lang.startsWith("en"),
-      v => v.name.includes("Karen")    && v.lang.startsWith("en"),
-      v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
-      v => v.name.includes("Google US English"),
-      v => v.name.includes("Google UK English Female"),
-      v => v.lang === "en-US" && v.localService,
-      v => v.lang.startsWith("en") && v.localService,
-      v => v.lang.startsWith("en"),
-    ];
-    for (const m of preferred) {
-      const found = voices.find(m);
-      if (found) return found;
-    }
-    return null;
-  }, []);
-
-  const speakWithTTS = useCallback(async (clean, onDone) => {
-    window.speechSynthesis.cancel();
-    const voice = await getBestVoice();
-
-    // Split into sentences to avoid Chrome 15s cutoff bug
-    const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
-    let idx = 0;
-
-    const speakNext = () => {
-      if (idx >= sentences.length) { onDone(); return; }
-      const sentence = sentences[idx++].trim();
-      if (!sentence) { speakNext(); return; }
-      const utt = new SpeechSynthesisUtterance(sentence);
-      utt.lang   = "en-US";
-      utt.rate   = 0.92;
-      utt.pitch  = 1.0;
-      utt.volume = 1.0;
-      if (voice) utt.voice = voice;
-      utt.onend   = speakNext;
-      utt.onerror = onDone;
-      window.speechSynthesis.speak(utt);
-    };
-    speakNext();
-  }, [getBestVoice]);
 
   const speakText = useCallback(async (text) => {
     updatePhase("speaking");
@@ -441,7 +440,7 @@ function GuruMode({ user, onClose }) {
 
     // Universal browser TTS — sentence by sentence to avoid Chrome cutoff
     await speakWithTTS(clean, () => updatePhase("idle"));
-  }, [updatePhase, speakWithTTS]);
+  }, [updatePhase]);
 
   // ── Send to AI — uses ref for history so no stale closure ──────────────────
   const sendToAI = useCallback(async (transcript) => {
@@ -837,7 +836,7 @@ function AppInner() {
 
     // Universal TTS — sentence by sentence, no cutoff
     await speakWithTTS(clean, () => setSpeaking(null));
-  }, [speaking, stopSpeaking, speakWithTTS]);
+  }, [speaking, stopSpeaking]);
   useEffect(()=>{
     const last=msgs[msgs.length-1];
     if(autoSpeak&&last?.role==="ai"&&!last?.streaming&&last?.text&&!last?.error) speakMsg(last.id,last.text);
