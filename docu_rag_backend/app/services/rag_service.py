@@ -259,7 +259,10 @@ async def stream_agentic(question, user_id, context_docs=""):
                     if before: yield "data: " + before + "\n\n"
                     tool_buf = full[ts:]; in_tool = True; continue
                 else:
-                    yield "data: " + token + "\n\n"; continue
+                    # Skip if token is start of tool JSON
+                    if not full.rstrip().endswith('{"tool"') and not token.lstrip().startswith('{"tool"'):
+                        yield "data: " + token + "\n\n"
+                    continue
             if in_tool:
                 tool_buf += token
                 try:
@@ -307,8 +310,11 @@ async def stream_agentic(question, user_id, context_docs=""):
         yield "data: [ERROR]" + str(e) + "\n\n"; return
 
     if sources: yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
-    add_history(user_id,"user",question)
-    add_history(user_id,"assistant",full[:1500])
+    # Clean any tool JSON that leaked into response before saving
+    import re as _re
+    clean = _re.sub(r'^\s*\{[^}]{0,200}\}\s*', '', full).strip()
+    add_history(user_id, "user", question)
+    add_history(user_id, "assistant", clean[:1500] or full[:1500])
     yield "data: [DONE]\n\n"
 
 async def ask_agentic(question, user_id, context_docs=""):
@@ -384,9 +390,12 @@ async def query_documents(question, user_id):
         for r in results:
             src  = r.get("source", "document")
             text = r.get("text", r.get("content", ""))
-            parts.append("[From: " + src + "]\n" + text)
+            if text.strip():
+                parts.append("[From: " + src + "]\n" + text.strip())
+        if not parts:
+            return ""
         context = "\n\n".join(parts)
-        print("[RAG] Found " + str(len(results)) + " chunks for: " + question[:50])
+        print("[RAG] Found " + str(len(parts)) + " chunks for: " + question[:50])
         return context
     except Exception as e:
         print(f"[RAG] Query error: {e}")
