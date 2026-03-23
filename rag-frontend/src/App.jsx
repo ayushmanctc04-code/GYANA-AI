@@ -204,6 +204,7 @@ function CodeBlock({ lang, code }) {
 
 function MD({ text = "" }) {
   text = stripToolJson(text);
+  text = wrapRawCode(text);
 
   const inline = (str, key) => {
     const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
@@ -302,6 +303,26 @@ function LoginPage() {
       </div>
     </div>
   );
+}
+
+// ── Auto-detect and wrap raw code blocks ─────────────────────────────────────
+function wrapRawCode(text) {
+  // If text contains large HTML blocks not wrapped in backticks, wrap them
+  if (!text.includes("```")) {
+    // Detect HTML
+    if (/<(!DOCTYPE|html|head|body|div|section|header|footer|main|nav|script|style)[^>]*>/i.test(text) && text.length > 200) {
+      return "```html\n" + text + "\n```";
+    }
+    // Detect Python
+    if (/^(import |from |def |class |if __name__|print\()/.test(text.trim()) && text.includes("\n")) {
+      return "```python\n" + text + "\n```";
+    }
+    // Detect JS/TS
+    if (/^(const |let |var |function |class |import |export |async )/.test(text.trim()) && text.includes("\n") && text.length > 100) {
+      return "```javascript\n" + text + "\n```";
+    }
+  }
+  return text;
 }
 
 // ── Text cleaner for TTS — strips ALL markdown and punctuation clutter ────────
