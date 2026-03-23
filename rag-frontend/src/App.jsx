@@ -902,6 +902,9 @@ function AppInner() {
           const token = line.slice(6);
           if (!token) continue;
 
+          // Strip tool JSON that leaked from backend — never show to user
+          if (token.includes('{"tool"') || token.startsWith('{"tool')) continue;
+
           if (token === "[DONE]") {
             patchMsg(aiId, {streaming: false});
             setLoading(false); setStatusMsg("");

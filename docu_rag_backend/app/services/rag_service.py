@@ -198,7 +198,7 @@ async def stream_agentic(question, user_id, context_docs=""):
     system  = SYSTEM
     sources = []
     if context_docs:
-        system = system + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs + "\nUse when relevant."
+        system = system + "\n\nUSER DOCUMENT CONTEXT (from uploaded file):\n" + context_docs + "\n\nAnswer using this document. Do NOT output JSON. Do NOT use tools. Answer directly."
 
     intent = detect_intent(question)
 
@@ -239,30 +239,32 @@ async def stream_agentic(question, user_id, context_docs=""):
     if intent in ("search","url"):
         system = system + "\n\nCRITICAL: Answer directly. No JSON. No tool calls."
 
-    messages = [{"role":"system","content":system}]
+    # When we have doc context or already searched, forbid tool calls
+    final_system = system
+    if context_docs or intent in ("search", "url"):
+        final_system = system + (
+            "\n\nCRITICAL INSTRUCTION: Answer in plain text only. "
+            "Do NOT output any JSON. Do NOT start with {. "
+            "Do NOT use tool calls. Just answer the question directly."
+        )
+
+    messages = [{"role":"system","content":final_system}]
     messages.extend(history[-12:])
     messages.append({"role":"user","content":question})
 
     full = ""; tool_buf = ""; in_tool = False
+    hold_buf = ""
+    HOLD_LEN = 15
 
     try:
         stream = groq_client.chat.completions.create(
             model=MODEL, messages=messages, temperature=0.7, max_tokens=3000, stream=True)
+
         for chunk in stream:
             token = chunk.choices[0].delta.content or ""
             if not token: continue
             full += token
-            if not in_tool:
-                ts = full.find('{"tool"')
-                if ts >= 0:
-                    before = full[:ts].strip()
-                    if before: yield "data: " + before + "\n\n"
-                    tool_buf = full[ts:]; in_tool = True; continue
-                else:
-                    # Skip if token is start of tool JSON
-                    if not full.rstrip().endswith('{"tool"') and not token.lstrip().startswith('{"tool"'):
-                        yield "data: " + token + "\n\n"
-                    continue
+
             if in_tool:
                 tool_buf += token
                 try:
@@ -271,21 +273,21 @@ async def stream_agentic(question, user_id, context_docs=""):
                     if tool == "web_search":
                         yield "data: [STATUS]Searching...\n\n"
                         sr2 = await search_web(tc.get("query",question))
-                        ctx2, src2 = build_search_context(sr2, tc.get("query",question))
+                        ctx2,src2 = build_search_context(sr2,tc.get("query",question))
                         sources.extend(src2)
-                        msgs2 = [{"role":"system","content":SYSTEM+"\n\n"+ctx2}]
-                        msgs2.extend(history[-6:]); msgs2.append({"role":"user","content":question})
-                        s2 = groq_client.chat.completions.create(model=MODEL,messages=msgs2,temperature=0.6,max_tokens=2000,stream=True)
+                        m2 = [{"role":"system","content":SYSTEM+"\n\n"+ctx2+"\n\nAnswer directly in plain text."}]
+                        m2.extend(history[-6:]); m2.append({"role":"user","content":question})
+                        s2 = groq_client.chat.completions.create(model=MODEL,messages=m2,temperature=0.6,max_tokens=2000,stream=True)
                         for c2 in s2:
                             t2 = c2.choices[0].delta.content or ""
                             if t2: yield "data: " + t2 + "\n\n"
                     elif tool == "read_url":
-                        yield "data: [STATUS]Reading...\n\n"
+                        yield "data: [STATUS]Reading page...\n\n"
                         ur = await read_url(tc.get("url",""))
                         if ur.get("content"):
-                            msgs3 = [{"role":"system","content":SYSTEM+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer. No tool JSON."}]
-                            msgs3.extend(history[-6:]); msgs3.append({"role":"user","content":question})
-                            s3 = groq_client.chat.completions.create(model=MODEL,messages=msgs3,temperature=0.6,max_tokens=2000,stream=True)
+                            m3 = [{"role":"system","content":SYSTEM+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer directly."}]
+                            m3.extend(history[-6:]); m3.append({"role":"user","content":question})
+                            s3 = groq_client.chat.completions.create(model=MODEL,messages=m3,temperature=0.6,max_tokens=2000,stream=True)
                             for c3 in s3:
                                 t3 = c3.choices[0].delta.content or ""
                                 if t3: yield "data: " + t3 + "\n\n"
@@ -293,7 +295,9 @@ async def stream_agentic(question, user_id, context_docs=""):
                     elif tool == "generate_image":
                         yield "data: [STATUS]Generating image...\n\n"
                         img2 = await generate_image(tc.get("prompt",question))
-                        if img2.get("image_b64"): yield "data: [IMAGE]" + img2["image_b64"] + "\n\n"; yield "data: Here is the image.\n\n"
+                        if img2.get("image_b64"):
+                            yield "data: [IMAGE]" + img2["image_b64"] + "\n\n"
+                            yield "data: Here is the image.\n\n"
                         else: yield "data: " + img2.get("error","Failed") + "\n\n"
                     elif tool == "run_code":
                         yield "data: [STATUS]Running code...\n\n"
@@ -306,6 +310,23 @@ async def stream_agentic(question, user_id, context_docs=""):
                         yield "data: [FILE]" + json.dumps(fd) + "\n\n"
                         yield "data: Created **" + fd["filename"] + "** - click download.\n\n"
                 except json.JSONDecodeError: pass
+                continue
+
+            # Buffer tokens — only stream when we know it is not a tool call
+            hold_buf += token
+            stripped = hold_buf.lstrip()
+            if stripped.startswith('{"tool"') or stripped.startswith('{ "tool"'):
+                in_tool  = True
+                tool_buf = hold_buf
+                hold_buf = ""
+                continue
+            if len(hold_buf) >= HOLD_LEN or not stripped.startswith("{"):
+                yield "data: " + hold_buf + "\n\n"
+                hold_buf = ""
+
+        if hold_buf and not hold_buf.lstrip().startswith('{"tool"'):
+            yield "data: " + hold_buf + "\n\n"
+
     except Exception as e:
         yield "data: [ERROR]" + str(e) + "\n\n"; return
 
