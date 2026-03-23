@@ -1367,6 +1367,34 @@ function AppInner() {
   );
 }
 
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error("App error:", e, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+          height:"100dvh",background:"#09100d",color:"#cce0db",fontFamily:"sans-serif",gap:"16px",padding:"20px"}}>
+          <div style={{fontSize:"2rem"}}>⚠️</div>
+          <div style={{fontSize:"1rem",fontWeight:"600"}}>Something went wrong</div>
+          <div style={{fontSize:".8rem",color:"#6b9690",background:"rgba(0,0,0,.3)",padding:"10px 16px",
+            borderRadius:"8px",maxWidth:"400px",textAlign:"center"}}>
+            {this.state.error.message}
+          </div>
+          <button onClick={()=>window.location.reload()}
+            style={{padding:"8px 20px",background:"#1e8a7c",border:"none",borderRadius:"8px",
+              color:"#fff",cursor:"pointer",fontSize:".85rem"}}>
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
