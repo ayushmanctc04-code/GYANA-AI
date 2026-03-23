@@ -148,6 +148,7 @@ const YantraLarge = () => (
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 function MD({ text = "" }) {
+  text = stripToolJson(text);
   // Strip any tool JSON that leaked into display text
   text = text.replace(/\{"tool"[^}]*\}/g, "").replace(/\{[^}]*"tool"[^}]*\}/g, "").trim();
   if (!text) return null;
@@ -243,6 +244,15 @@ function LoginPage() {
 }
 
 // ── Text cleaner for TTS — strips ALL markdown and punctuation clutter ────────
+function stripToolJson(text) {
+  if (!text) return text;
+  // Remove any {"tool":...} JSON from start or anywhere in text
+  return text
+    .replace(/^\s*\{["']?tool["']?\s*:[^}]{0,500}\}\s*/g, '')
+    .replace(/\{["']?tool["']?\s*:[^}]{0,500}\}/g, '')
+    .trim();
+}
+
 function cleanForSpeech(text) {
   return text
     .replace(/\{"tool".*?\}/gs, "")
@@ -481,7 +491,7 @@ function GuruMode({ user, onClose }) {
 
       // Add assistant reply to history ref
       historyRef.current = [...newHistory, { role: "assistant", content: answer }];
-      setResponse(answer);
+      setResponse(stripToolJson(answer));
       await speakText(answer);
     } catch (err) {
       console.error("AI error:", err);
@@ -678,10 +688,10 @@ function GuruMode({ user, onClose }) {
       )}
 
       {/* Response card — only shown after reply */}
-      {response && (
+      {response && stripToolJson(response) && (
         <div className="g-card show">
           <span className="g-card-lbl">Gyana AI</span>
-          <span className="g-card-txt">{response}</span>
+          <span className="g-card-txt">{stripToolJson(response)}</span>
         </div>
       )}
 
