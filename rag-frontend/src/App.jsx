@@ -287,18 +287,29 @@ async function getBestVoice() {
   });
   const voices = await getVoices();
   const preferred = [
+    // Best on Windows — natural sounding
     v => v.name === "Microsoft Aria Online (Natural) - English (United States)",
     v => v.name.includes("Microsoft Aria"),
     v => v.name.includes("Microsoft Jenny"),
+    v => v.name.includes("Microsoft Ana"),
+    // Indian English — great for Indian users
+    v => v.name === "Microsoft Ravi - English (India)",
     v => v.name.includes("Microsoft Ravi"),
+    v => v.name.includes("Microsoft Heera"),
+    // Good US English
+    v => v.name === "Google US English",
+    v => v.name.includes("Google UK English Female"),
+    v => v.name === "Microsoft Zira - English (United States)",
     v => v.name.includes("Microsoft Zira"),
+    v => v.name === "Microsoft Mark - English (United States)",
     v => v.name.includes("Microsoft David"),
+    // Apple voices
     v => v.name === "Samantha" && v.lang.startsWith("en"),
     v => v.name.includes("Samantha") && v.lang.startsWith("en"),
     v => v.name.includes("Karen")    && v.lang.startsWith("en"),
     v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
-    v => v.name.includes("Google US English"),
-    v => v.name.includes("Google UK English Female"),
+    // Generic fallbacks
+    v => v.lang === "en-IN" && v.localService,
     v => v.lang === "en-US" && v.localService,
     v => v.lang.startsWith("en") && v.localService,
     v => v.lang.startsWith("en"),
@@ -321,7 +332,7 @@ async function speakWithTTS(clean, onDone) {
     if (!sentence) { speakNext(); return; }
     const utt    = new SpeechSynthesisUtterance(sentence);
     utt.lang     = "en-US";
-    utt.rate     = 0.92;
+    utt.rate     = 0.88;
     utt.pitch    = 1.0;
     utt.volume   = 1.0;
     if (voice) utt.voice = voice;
