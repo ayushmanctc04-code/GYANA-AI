@@ -202,9 +202,10 @@ function CodeBlock({ lang, code }) {
   );
 }
 
-function MD({ text = "" }) {
+function MD({ text = "", isComplete = true }) {
   text = stripToolJson(text);
-  text = wrapRawCode(text);
+  // Only auto-wrap raw code when streaming is complete
+  if (isComplete) text = wrapRawCode(text);
 
   const inline = (str, key) => {
     const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
@@ -307,20 +308,28 @@ function LoginPage() {
 
 // ── Auto-detect and wrap raw code blocks ─────────────────────────────────────
 function wrapRawCode(text) {
-  // If text contains large HTML blocks not wrapped in backticks, wrap them
-  if (!text.includes("```")) {
-    // Detect HTML
-    if (/<(!DOCTYPE|html|head|body|div|section|header|footer|main|nav|script|style)[^>]*>/i.test(text) && text.length > 200) {
-      return "```html\n" + text + "\n```";
-    }
-    // Detect Python
-    if (/^(import |from |def |class |if __name__|print\()/.test(text.trim()) && text.includes("\n")) {
-      return "```python\n" + text + "\n```";
-    }
-    // Detect JS/TS
-    if (/^(const |let |var |function |class |import |export |async )/.test(text.trim()) && text.includes("\n") && text.length > 100) {
-      return "```javascript\n" + text + "\n```";
-    }
+  if (text.includes("```")) return text; // already has code blocks
+  const t = text.trim();
+  // Detect HTML document
+  if (/<(!DOCTYPE|html)/i.test(t) && t.length > 200) {
+    return "```html\n" + t + "\n```";
+  }
+  // Detect HTML snippet (lots of tags)
+  const tagCount = (t.match(/<[a-z][^>]*>/gi) || []).length;
+  if (tagCount > 5 && t.length > 300) {
+    return "```html\n" + t + "\n```";
+  }
+  // Detect Python
+  if (/^(import |from |def |class |if __name__)/.test(t) && t.includes("\n") && t.length > 80) {
+    return "```python\n" + t + "\n```";
+  }
+  // Detect JavaScript
+  if (/^(const |let |var |function |class |import |export |async function)/.test(t) && t.includes("\n") && t.length > 80) {
+    return "```javascript\n" + t + "\n```";
+  }
+  // Detect CSS
+  if (/^[a-z.*#@].*{/.test(t) && t.includes("{") && t.includes("}") && t.length > 100) {
+    return "```css\n" + t + "\n```";
   }
   return text;
 }
@@ -1307,7 +1316,7 @@ function AppInner() {
                       <div className="a-body">
                         <div className="a-meta"><span className="a-name">Gyana AI</span><span className="a-time">{msg.time}</span></div>
                         <div className={`a-text${msg.error?" a-err":""}`}>
-                          {msg.text?<MD text={msg.text}/>:msg.streaming?<div className="typing"><span/><span/><span/></div>:null}
+                          {msg.text?<MD text={msg.text} isComplete={!msg.streaming}/>:msg.streaming?<div className="typing"><span/><span/><span/></div>:null}
                           {msg.streaming&&msg.text&&<span className="cur"/>}
                         </div>
                         {!msg.streaming&&msg.sources?.length>0&&(
