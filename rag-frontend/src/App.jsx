@@ -147,11 +147,64 @@ const YantraLarge = () => (
 );
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
+// ── Code block renderer — like Claude ────────────────────────────────────────
+function CodeBlock({ lang, code }) {
+  const [copied, setCopied] = React.useState(false);
+  const [showPreview, setShowPreview] = React.useState(false);
+  const isRunnable = ["html","css","javascript","js","jsx"].includes((lang||"").toLowerCase());
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const previewCode = () => setShowPreview(p => !p);
+
+  // Build preview HTML for frontend code
+  const getPreviewHtml = () => {
+    const l = (lang||"").toLowerCase();
+    if (l === "html") return code;
+    if (l === "css")  return `<style>${code}</style><div style="padding:20px;background:#fff;min-height:100px;">CSS Preview</div>`;
+    if (l === "js" || l === "javascript") return `<script>${code}</script>`;
+    if (l === "jsx")  return `<div id="root"></div><script src="https://unpkg.com/react@18/umd/react.development.js"></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script><script src="https://unpkg.com/@babel/standalone/babel.min.js"></script><script type="text/babel">${code}</script>`;
+    return code;
+  };
+
+  return (
+    <div className="code-block">
+      <div className="code-header">
+        <span className="code-lang-badge">{lang || "code"}</span>
+        <div className="code-actions">
+          {isRunnable && (
+            <button className="code-btn" onClick={previewCode}>
+              {showPreview ? "▲ Hide Preview" : "▶ Preview"}
+            </button>
+          )}
+          <button className="code-btn" onClick={copyCode}>
+            {copied ? "✓ Copied" : "⎘ Copy"}
+          </button>
+        </div>
+      </div>
+      <pre className="code-pre"><code className="code-content">{code}</code></pre>
+      {showPreview && (
+        <div className="code-preview">
+          <div className="code-preview-label">Live Preview</div>
+          <iframe
+            className="code-iframe"
+            srcDoc={getPreviewHtml()}
+            sandbox="allow-scripts"
+            title="preview"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MD({ text = "" }) {
   text = stripToolJson(text);
-  // Strip any tool JSON that leaked into display text
-  text = text.replace(/\{"tool"[^}]*\}/g, "").replace(/\{[^}]*"tool"[^}]*\}/g, "").trim();
-  if (!text) return null;
+
   const inline = (str, key) => {
     const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
     return <span key={key}>{parts.map((p, i) => {
@@ -161,50 +214,58 @@ function MD({ text = "" }) {
       return p;
     })}</span>;
   };
-  const lines = text.split("\n"); const out = []; let i = 0;
+
+  const lines = text.split("\n");
+  const out = [];
+  let i = 0;
+
   while (i < lines.length) {
     const line = lines[i];
-    if (/^[-*]\s/.test(line)) {
-      const items = []; while (i < lines.length && /^[-*]\s/.test(lines[i])) items.push(lines[i++].replace(/^[-*]\s/,""));
-      out.push(<ul key={i} className="md-ul">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ul>); continue;
+
+    // Code block
+    if (line.startsWith("```")) {
+      const lang = line.slice(3).trim();
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) codeLines.push(lines[i++]);
+      i++;
+      out.push(<CodeBlock key={"cb"+i} lang={lang} code={codeLines.join("\n")} />);
+      continue;
     }
+    // Headings
+    if (/^### /.test(line)) { out.push(<h4 key={i} className="md-h3">{inline(line.slice(4),i)}</h4>); i++; continue; }
+    if (/^## /.test(line))  { out.push(<h3 key={i} className="md-h2">{inline(line.slice(3),i)}</h3>); i++; continue; }
+    if (/^# /.test(line))   { out.push(<h2 key={i} className="md-h1">{inline(line.slice(2),i)}</h2>); i++; continue; }
+    // Bold section headers
+    if (/^\*\*[^*]+\*\*\s*$/.test(line.trim())) {
+      out.push(<div key={i} className="md-section-header">{line.replace(/\*\*/g,"").trim()}</div>);
+      i++; continue;
+    }
+    // Bullet list
+    if (/^[-*•]\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*•]\s/.test(lines[i])) items.push(lines[i++].replace(/^[-*•]\s/,""));
+      out.push(<ul key={i} className="md-ul">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ul>);
+      continue;
+    }
+    // Numbered list
     if (/^\d+\.\s/.test(line)) {
-      const items = []; while (i < lines.length && /^\d+\.\s/.test(lines[i])) items.push(lines[i++].replace(/^\d+\.\s/,""));
-      out.push(<ol key={i} className="md-ol">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ol>); continue;
+      const items = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) items.push(lines[i++].replace(/^\d+\.\s/,""));
+      out.push(<ol key={i} className="md-ol">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ol>);
+      continue;
     }
+    // HR
+    if (/^---+$/.test(line.trim())) { out.push(<hr key={i} className="md-hr"/>); i++; continue; }
+    // Empty
     if (!line.trim()) { out.push(<div key={i} className="md-gap"/>); i++; continue; }
-    out.push(<p key={i} className="md-p">{inline(line,i)}</p>); i++;
+    // Paragraph
+    out.push(<p key={i} className="md-p">{inline(line,i)}</p>);
+    i++;
   }
   return <div className="md-root">{out}</div>;
 }
 
-// ── Error Boundary — catches crashes and shows error instead of blank screen ──
-class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(e) { return { error: e }; }
-  componentDidCatch(e, info) { console.error("App crash:", e, info); }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-          height:"100dvh",background:"#09100d",color:"#cce0db",fontFamily:"sans-serif",padding:"24px",gap:"16px",textAlign:"center"}}>
-          <div style={{fontSize:"2rem"}}>⚠️</div>
-          <div style={{fontSize:"1rem",color:"#c05050"}}>Something went wrong</div>
-          <pre style={{fontSize:".7rem",color:"#6b9690",maxWidth:"600px",overflow:"auto",textAlign:"left",
-            background:"rgba(255,255,255,.04)",padding:"12px",borderRadius:"8px",whiteSpace:"pre-wrap"}}>
-            {this.state.error?.message}
-          </pre>
-          <button onClick={()=>window.location.reload()}
-            style={{padding:"8px 20px",background:"rgba(184,146,46,.1)",border:"1px solid rgba(184,146,46,.2)",
-            borderRadius:"20px",color:"#cda53a",cursor:"pointer",fontFamily:"sans-serif"}}>
-            Reload
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 // ── Login Page ────────────────────────────────────────────────────────────────
 function LoginPage() {

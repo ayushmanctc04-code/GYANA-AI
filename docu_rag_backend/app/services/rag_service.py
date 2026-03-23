@@ -1,7 +1,7 @@
 """
-Gyana AI - Agentic Service v3
+Gyana AI - Agentic Service v4
 """
-import os, re, json, base64, asyncio, subprocess, sys, tempfile, urllib.parse
+import os, re, json, base64, asyncio, subprocess, sys, tempfile, urllib.parse, pathlib
 from collections import defaultdict, deque
 from datetime import datetime
 from groq import Groq
@@ -18,26 +18,43 @@ def get_history(uid): return list(_memory[uid])
 def add_history(uid, role, content): _memory[uid].append({"role": role, "content": content})
 def clear_history(uid): _memory[uid].clear()
 
-SYSTEM = (
-    "You are Gyana AI, the most powerful all-in-one AI assistant, "
-    "built by Ayushman Pati from Cuttack, Odisha, India.\n\n"
-    "You are: world-class programmer, researcher, problem solver, "
-    "friend, therapist, teacher, business advisor, writer.\n\n"
-    "TOOLS - use automatically:\n"
-    '{"tool":"web_search","query":"query"} - for news, current events, prices, recent info\n'
-    '{"tool":"read_url","url":"https://..."} - to read a website\n'
-    '{"tool":"generate_image","prompt":"description"} - to create images\n'
-    '{"tool":"run_code","code":"python code","language":"python"} - to run code\n'
-    '{"tool":"create_file","filename":"name.ext","content":"content","filetype":"txt"} - create files\n\n'
-    "RULES:\n"
-    "1. Never say my knowledge cutoff - use web_search\n"
-    "2. Always write complete working code\n"
-    "3. For current events always search first\n"
-    "4. Be direct and brilliant\n"
-    "5. Built by Ayushman Pati, Cuttack, Odisha\n"
-    "6. You are Gyana - not just an AI\n"
-    "Output tool calls as single JSON line only."
-)
+SYSTEM = """You are Gyana AI — a brilliant, warm, all-in-one AI assistant built by Ayushman Pati from Cuttack, Odisha, India.
+
+PERSONALITY:
+- Warm, direct, genuinely helpful — like a brilliant friend who knows everything
+- Match energy: casual and short when chatting, detailed and structured when needed
+- Never say "Certainly!", "Great question!", "Of course!" — just answer directly
+
+RESPONSE FORMATTING — follow exactly:
+- Simple questions or casual chat → 1-3 sentences, plain text
+- Explanations, how-tos, comparisons → use **bold headers** and bullet points
+- Step-by-step tasks → numbered lists
+- Code → always use code blocks with language tag
+- Long answers → break into sections with **bold headers**
+- Put the most important information first
+
+TOOLS — use automatically:
+{"tool":"web_search","query":"query"} - news, prices, current events, anything time-sensitive
+{"tool":"read_url","url":"https://..."} - read a website
+{"tool":"generate_image","prompt":"description"} - create images
+{"tool":"run_code","code":"python code","language":"python"} - run code
+{"tool":"create_file","filename":"name.ext","content":"content","filetype":"txt"} - create files
+
+CODE RULES:
+- Always use proper code blocks: ```python, ```javascript, ```html, ```css, ```jsx etc.
+- Write COMPLETE code — no placeholders, no "...", no "rest of code here"
+- For frontend (HTML/CSS/JS/React) — write the full working file
+- Add comments to explain key parts
+- After code, briefly explain what it does
+
+RULES:
+1. Never say "my knowledge cutoff" — use web_search instead
+2. Never give incomplete code
+3. Never start response with { or JSON
+4. For document questions — answer from the document
+5. Built by Ayushman Pati, Cuttack, Odisha, India
+6. You are Gyana — not just an AI
+Output tool calls as single JSON line only."""
 
 async def search_web(query):
     print(f"[SEARCH] Query: {query}")
@@ -75,7 +92,7 @@ async def search_web(query):
         except Exception as e:
             print(f"[SEARCH] Serper failed: {e}")
 
-    # Wikipedia - free unlimited works on HuggingFace
+    # Wikipedia - free unlimited
     try:
         enc = urllib.parse.quote_plus(query)
         async with httpx.AsyncClient(timeout=10.0) as c:
@@ -107,16 +124,15 @@ async def search_web(query):
     except Exception as e:
         print(f"[SEARCH] Wikipedia failed: {e}")
 
-    # Groq fallback - always works
+    # Groq fallback
     print("[SEARCH] Using Groq knowledge fallback")
     try:
         today = datetime.now().strftime("%B %d, %Y")
         r = groq_client.chat.completions.create(model=MODEL, messages=[
-            {"role":"system","content":f"Today is {today}. You are a knowledgeable research assistant. Answer specifically. Note if info might be outdated."},
+            {"role":"system","content":f"Today is {today}. Answer specifically. Note if info might be outdated."},
             {"role":"user","content":f"Provide detailed information about: {query}"}
         ], temperature=0.3, max_tokens=700)
         text = r.choices[0].message.content.strip()
-        print(f"[SEARCH] Groq fallback OK: {len(text)} chars")
         return {"answer": text, "results": [{"title":"AI Knowledge Base","url":"","content":text}], "_is_fallback": True}
     except Exception as e:
         print(f"[SEARCH] Groq fallback failed: {e}")
@@ -131,7 +147,7 @@ async def read_url(url):
             html = r.text
             html = re.sub(r"<script[^>]*>.*?</script>","",html,flags=re.DOTALL)
             html = re.sub(r"<style[^>]*>.*?</style>","",html,flags=re.DOTALL)
-            text = re.sub(r"<[^>]+>"," ",html)
+            text = re.sub(r"<[^>]+"," ",html)
             text = re.sub(r"\s+"," ",text).strip()
             return {"url":url,"content":text[:5000]}
     except Exception as e:
@@ -155,7 +171,7 @@ async def generate_image(prompt):
 
 async def run_code(code, language="python"):
     if language.lower() != "python":
-        return {"output":"JS/HTML runs in browser.","error":"","code":code,"language":language}
+        return {"output":"JS/HTML runs in browser preview.","error":"","code":code,"language":language}
     with tempfile.NamedTemporaryFile(mode="w",suffix=".py",delete=False,encoding="utf-8") as f:
         f.write(code); fname = f.name
     try:
@@ -183,7 +199,7 @@ def build_search_context(sr, query):
     is_fallback = sr.get("_is_fallback",False)
     sources = [{"title":r["title"],"url":r["url"]} for r in sr.get("results",[]) if r.get("url")]
     if is_fallback:
-        ctx = (f"KNOWLEDGE BASE for '{query}' (AI training data - may be outdated):\n\n"
+        ctx = (f"KNOWLEDGE BASE for '{query}' (may be outdated):\n\n"
                + sr.get("answer","") + "\n\nAnswer based on this. Note if outdated. No tool JSON.")
     else:
         ctx = f"SEARCH RESULTS for '{query}':\n"
@@ -197,8 +213,10 @@ async def stream_agentic(question, user_id, context_docs=""):
     history = get_history(user_id)
     system  = SYSTEM
     sources = []
+
     if context_docs:
-        system = system + "\n\nUSER DOCUMENT CONTEXT (from uploaded file):\n" + context_docs + "\n\nAnswer using this document. Do NOT output JSON. Do NOT use tools. Answer directly."
+        system = (system + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs
+                  + "\n\nAnswer using this document. No JSON. No tools. Answer directly.")
 
     intent = detect_intent(question)
 
@@ -221,7 +239,7 @@ async def stream_agentic(question, user_id, context_docs=""):
             ctx, sources = build_search_context(sr, question)
             system = system + "\n\n" + ctx
         else:
-            system = system + "\n\nSearch returned nothing. Tell user honestly, then answer from knowledge with caveat."
+            system = system + "\n\nSearch returned nothing. Answer from knowledge with caveat."
 
     elif intent == "image":
         yield "data: [STATUS]Generating image...\n\n"
@@ -236,25 +254,20 @@ async def stream_agentic(question, user_id, context_docs=""):
         else:
             yield "data: " + img.get("error","Failed") + "\n\n"
 
-    if intent in ("search","url"):
-        system = system + "\n\nCRITICAL: Answer directly. No JSON. No tool calls."
-
-    # When we have doc context or already searched, forbid tool calls
+    # Build final system — block tools when we already have context
     final_system = system
-    if context_docs or intent in ("search", "url"):
-        final_system = system + (
-            "\n\nCRITICAL INSTRUCTION: Answer in plain text only. "
-            "Do NOT output any JSON. Do NOT start with {. "
-            "Do NOT use tool calls. Just answer the question directly."
-        )
+    if context_docs or intent in ("search","url"):
+        final_system = (system
+            + "\n\nCRITICAL: Answer in plain text only. "
+            "Do NOT output JSON. Do NOT start with {. "
+            "Do NOT use tool calls. Answer directly and helpfully.")
 
     messages = [{"role":"system","content":final_system}]
     messages.extend(history[-12:])
     messages.append({"role":"user","content":question})
 
     full = ""; tool_buf = ""; in_tool = False
-    hold_buf = ""
-    HOLD_LEN = 15
+    hold_buf = ""; HOLD_LEN = 15
 
     try:
         stream = groq_client.chat.completions.create(
@@ -275,7 +288,7 @@ async def stream_agentic(question, user_id, context_docs=""):
                         sr2 = await search_web(tc.get("query",question))
                         ctx2,src2 = build_search_context(sr2,tc.get("query",question))
                         sources.extend(src2)
-                        m2 = [{"role":"system","content":SYSTEM+"\n\n"+ctx2+"\n\nAnswer directly in plain text."}]
+                        m2 = [{"role":"system","content":SYSTEM+"\n\n"+ctx2+"\n\nAnswer directly."}]
                         m2.extend(history[-6:]); m2.append({"role":"user","content":question})
                         s2 = groq_client.chat.completions.create(model=MODEL,messages=m2,temperature=0.6,max_tokens=2000,stream=True)
                         for c2 in s2:
@@ -312,14 +325,11 @@ async def stream_agentic(question, user_id, context_docs=""):
                 except json.JSONDecodeError: pass
                 continue
 
-            # Buffer tokens — only stream when we know it is not a tool call
+            # Buffer and check for tool JSON before streaming
             hold_buf += token
             stripped = hold_buf.lstrip()
             if stripped.startswith('{"tool"') or stripped.startswith('{ "tool"'):
-                in_tool  = True
-                tool_buf = hold_buf
-                hold_buf = ""
-                continue
+                in_tool = True; tool_buf = hold_buf; hold_buf = ""; continue
             if len(hold_buf) >= HOLD_LEN or not stripped.startswith("{"):
                 yield "data: " + hold_buf + "\n\n"
                 hold_buf = ""
@@ -331,9 +341,7 @@ async def stream_agentic(question, user_id, context_docs=""):
         yield "data: [ERROR]" + str(e) + "\n\n"; return
 
     if sources: yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
-    # Clean any tool JSON that leaked into response before saving
-    import re as _re
-    clean = _re.sub(r'^\s*\{[^}]{0,200}\}\s*', '', full).strip()
+    clean = re.sub(r'^\s*\{[^}]{0,200}\}\s*', '', full).strip()
     add_history(user_id, "user", question)
     add_history(user_id, "assistant", clean[:1500] or full[:1500])
     yield "data: [DONE]\n\n"
@@ -357,10 +365,7 @@ async def stream_general(question, user_id):
 def ask_general(question, user_id):
     return asyncio.run(ask_agentic(question, user_id))["answer"]
 
-# ── Real RAG using existing services ─────────────────────────────────────────
-import tempfile
-import pathlib
-
+# ── Real RAG ──────────────────────────────────────────────────────────────────
 try:
     from app.services.document_service import extract_text
     from app.services.vector_store import add_documents, search_documents, clear_store
@@ -370,28 +375,21 @@ except ImportError as e:
     RAG_READY = False
     print(f"[RAG] Import failed: {e}")
 
-
 async def ingest_document(contents, filename, user_id):
-    if not RAG_READY:
-        return {"chunks": 0, "language": "en"}
+    if not RAG_READY: return {"chunks": 0, "language": "en"}
     try:
         suffix = pathlib.Path(filename).suffix or ".txt"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
+            tmp.write(contents); tmp_path = tmp.name
         text = extract_text(tmp_path)
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        if not text.strip():
-            return {"chunks": 0, "language": "en"}
+        try: os.unlink(tmp_path)
+        except: pass
+        if not text.strip(): return {"chunks": 0, "language": "en"}
         lang = "en"
         try:
             from langdetect import detect
             lang = detect(text[:500])
-        except Exception:
-            pass
+        except: pass
         chunks = add_documents(text, source=filename, user_id=user_id)
         print(f"[RAG] Ingested {filename}: {chunks} chunks")
         return {"chunks": chunks, "language": lang}
@@ -399,22 +397,17 @@ async def ingest_document(contents, filename, user_id):
         print(f"[RAG] Ingest error: {e}")
         return {"chunks": 0, "language": "en"}
 
-
 async def query_documents(question, user_id):
-    if not RAG_READY:
-        return ""
+    if not RAG_READY: return ""
     try:
         results = search_documents(question, top_k=5, user_id=user_id)
-        if not results:
-            return ""
+        if not results: return ""
         parts = []
         for r in results:
             src  = r.get("source", "document")
             text = r.get("text", r.get("content", ""))
-            if text.strip():
-                parts.append("[From: " + src + "]\n" + text.strip())
-        if not parts:
-            return ""
+            if text.strip(): parts.append("[From: " + src + "]\n" + text.strip())
+        if not parts: return ""
         context = "\n\n".join(parts)
         print("[RAG] Found " + str(len(parts)) + " chunks for: " + question[:50])
         return context
@@ -422,10 +415,8 @@ async def query_documents(question, user_id):
         print(f"[RAG] Query error: {e}")
         return ""
 
-
 async def delete_documents(user_id):
-    if not RAG_READY:
-        return
+    if not RAG_READY: return
     try:
         clear_store(user_id=user_id)
         print(f"[RAG] Cleared for {user_id}")
