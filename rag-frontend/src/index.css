@@ -68,6 +68,136 @@ textarea {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.scene-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.scene-aurora,
+.scene-orbital,
+.scene-monolith,
+.scene-rings,
+.scene-grid {
+  position: absolute;
+}
+
+.scene-aurora {
+  filter: blur(14px);
+  opacity: 0.7;
+}
+
+.scene-aurora-a {
+  top: -12%;
+  right: -8%;
+  width: 38rem;
+  height: 38rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(76, 233, 222, 0.18) 0%, rgba(76, 233, 222, 0) 70%);
+  animation: auroraFloat 18s ease-in-out infinite;
+}
+
+.scene-aurora-b {
+  bottom: -18%;
+  left: -10%;
+  width: 34rem;
+  height: 34rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(18, 116, 122, 0.22) 0%, rgba(18, 116, 122, 0) 72%);
+  animation: auroraFloat 24s ease-in-out infinite reverse;
+}
+
+.scene-grid {
+  left: -10%;
+  right: -10%;
+  bottom: -12rem;
+  height: 26rem;
+  background:
+    linear-gradient(rgba(85, 232, 221, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(85, 232, 221, 0.08) 1px, transparent 1px);
+  background-size: 56px 56px;
+  transform: perspective(900px) rotateX(78deg);
+  transform-origin: center top;
+  opacity: 0.26;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.95), transparent);
+}
+
+.scene-rings {
+  top: 18%;
+  left: 58%;
+  width: 24rem;
+  height: 24rem;
+  transform: translateX(-50%);
+}
+
+.scene-rings span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(112, 245, 236, 0.14);
+  box-shadow: inset 0 0 40px rgba(76, 233, 222, 0.04);
+  animation: rotateRing 22s linear infinite;
+}
+
+.scene-rings span:nth-child(2) {
+  inset: 2.2rem;
+  animation-direction: reverse;
+  animation-duration: 16s;
+}
+
+.scene-rings span:nth-child(3) {
+  inset: 4.6rem;
+  animation-duration: 12s;
+}
+
+.scene-monolith {
+  width: 7rem;
+  height: 17rem;
+  border-radius: 2rem;
+  background: linear-gradient(180deg, rgba(130, 246, 239, 0.14), rgba(130, 246, 239, 0.02));
+  border: 1px solid rgba(130, 246, 239, 0.16);
+  box-shadow: 0 0 40px rgba(24, 184, 175, 0.12);
+  transform: rotate(18deg);
+}
+
+.scene-monolith-a {
+  top: 14%;
+  left: 48%;
+  animation: monolithFloat 20s ease-in-out infinite;
+}
+
+.scene-monolith-b {
+  right: 6%;
+  bottom: 16%;
+  transform: rotate(-16deg);
+  animation: monolithFloat 24s ease-in-out infinite reverse;
+}
+
+.scene-orbital {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(195, 255, 252, 0.9), rgba(24, 184, 175, 0.16) 72%);
+  box-shadow: 0 0 28px rgba(120, 252, 244, 0.55);
+}
+
+.scene-orbital-a {
+  top: 24%;
+  left: 62%;
+  animation: orbitalDrift 14s ease-in-out infinite;
+}
+
+.scene-orbital-b {
+  bottom: 22%;
+  right: 16%;
+  animation: orbitalDrift 18s ease-in-out infinite reverse;
 }
 
 .side-rail {
@@ -78,6 +208,8 @@ textarea {
   border-right: 1px solid var(--line);
   background: rgba(10, 13, 16, 0.78);
   backdrop-filter: blur(22px);
+  position: relative;
+  z-index: 2;
 }
 
 .brand-button,
@@ -208,6 +340,54 @@ textarea {
   gap: 10px;
 }
 
+.account-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.account-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(24, 184, 175, 0.14);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.account-avatar.image {
+  object-fit: cover;
+}
+
+.account-copy {
+  min-width: 0;
+}
+
+.account-copy strong,
+.account-copy span {
+  display: block;
+}
+
+.account-copy strong {
+  font-size: 0.9rem;
+}
+
+.account-copy span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .upload-item {
   display: flex;
   align-items: center;
@@ -238,10 +418,12 @@ textarea {
 }
 
 .history-item {
-  padding: 12px 14px;
+  padding: 10px;
   border-radius: 18px;
-  text-align: left;
   color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .history-item.active {
@@ -249,11 +431,37 @@ textarea {
   background: rgba(24, 184, 175, 0.1);
 }
 
+.history-item-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 2px 4px;
+}
+
+.history-delete {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+}
+
+.history-delete:hover {
+  border-color: rgba(255, 134, 119, 0.35);
+  color: var(--danger);
+}
+
 .chat-stage {
   padding: 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  position: relative;
+  z-index: 2;
 }
 
 .chat-header {
@@ -263,6 +471,9 @@ textarea {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+  background:
+    linear-gradient(180deg, rgba(18, 26, 31, 0.86), rgba(15, 21, 26, 0.72)),
+    radial-gradient(circle at top right, rgba(72, 227, 216, 0.12), transparent 28%);
 }
 
 .chat-title {
@@ -333,6 +544,31 @@ textarea {
   text-align: center;
 }
 
+.welcome-meta {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.welcome-meta span,
+.welcome-stat {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.welcome-meta span {
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .welcome-orb {
   width: 112px;
   height: 112px;
@@ -371,6 +607,38 @@ textarea {
   letter-spacing: -0.01em;
 }
 
+.welcome-stat-row {
+  margin-top: 26px;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.welcome-stat {
+  min-width: 160px;
+  padding: 14px 16px;
+  border-radius: 22px;
+}
+
+.welcome-stat strong,
+.welcome-stat span {
+  display: block;
+}
+
+.welcome-stat strong {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.welcome-stat span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+}
+
 .suggestion-row {
   margin-top: 34px;
   display: flex;
@@ -401,10 +669,20 @@ textarea {
 .message-turn {
   padding: 18px 22px;
   border-radius: 28px;
+  position: relative;
+  overflow: hidden;
 }
 
 .message-turn.user {
   background: rgba(24, 184, 175, 0.08);
+}
+
+.message-turn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 26%);
+  pointer-events: none;
 }
 
 .message-label {
@@ -570,6 +848,9 @@ textarea {
   width: min(860px, 100%);
   padding: 14px;
   border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(17, 22, 26, 0.82), rgba(11, 16, 20, 0.92)),
+    radial-gradient(circle at top right, rgba(72, 227, 216, 0.08), transparent 35%);
 }
 
 .composer-shell textarea {
@@ -673,6 +954,9 @@ textarea {
   border-radius: 32px;
   padding: 38px 28px;
   text-align: center;
+  background:
+    linear-gradient(180deg, rgba(18, 26, 31, 0.88), rgba(10, 15, 20, 0.82)),
+    radial-gradient(circle at top, rgba(72, 227, 216, 0.12), transparent 40%);
 }
 
 .guru-orb-wrap {
@@ -833,6 +1117,45 @@ textarea {
   }
 }
 
+@keyframes auroraFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2rem, -1rem, 0) scale(1.08);
+  }
+}
+
+@keyframes rotateRing {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes monolithFloat {
+  0%,
+  100% {
+    transform: translateY(0) rotate(18deg);
+  }
+  50% {
+    transform: translateY(-16px) rotate(14deg);
+  }
+}
+
+@keyframes orbitalDrift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(24px, -18px, 0);
+  }
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -887,5 +1210,9 @@ textarea {
   .guru-center h2,
   .auth-panel h1 {
     font-size: 2.5rem;
+  }
+
+  .welcome-stat {
+    width: 100%;
   }
 }

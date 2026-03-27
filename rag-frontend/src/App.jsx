@@ -83,9 +83,13 @@ function createSession() {
   };
 }
 
-function loadSessions() {
+function getSessionStorageKey(userId = "guest-workspace") {
+  return `${CHAT_STORAGE_KEY}.${userId}`;
+}
+
+function loadSessions(userId = "guest-workspace") {
   try {
-    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    const raw = localStorage.getItem(getSessionStorageKey(userId));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) && parsed.length ? parsed : [createSession()];
   } catch {
@@ -93,8 +97,8 @@ function loadSessions() {
   }
 }
 
-function saveSessions(sessions) {
-  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
+function saveSessions(sessions, userId = "guest-workspace") {
+  localStorage.setItem(getSessionStorageKey(userId), JSON.stringify(sessions));
 }
 
 function loadPreferredLanguage() {
@@ -141,6 +145,58 @@ function normalizeLanguageTag(language) {
 
 function getLanguageLabel(language) {
   return LANGUAGE_OPTIONS.find((option) => option.value === language)?.label || "Auto";
+}
+
+function getUserInitial(user) {
+  const label = user?.displayName || user?.email || "G";
+  return label.trim().charAt(0).toUpperCase();
+}
+
+function stripMarkdownForSpeech(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/[_~]/g, "")
+    .replace(/\bhttps?:\/\/\S+/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+}
+
+function chunkSpeechText(text, maxLength = 220) {
+  const clean = stripMarkdownForSpeech(text);
+  if (!clean) return [];
+
+  const sentences = clean
+    .split(/(?<=[.!?।])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const chunks = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if (!current) {
+      current = sentence;
+      continue;
+    }
+
+    if (`${current} ${sentence}`.length <= maxLength) {
+      current = `${current} ${sentence}`;
+    } else {
+      chunks.push(current);
+      current = sentence;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [clean];
 }
 
 function formatTime(dateLike) {
@@ -380,7 +436,6 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
 }
 
 function AppInner() {
-  const [initialSessions] = useState(() => loadSessions());
   const [user, setUser] = useState(
     hasFirebaseConfig
       ? undefined
@@ -396,8 +451,8 @@ function AppInner() {
     documents: [],
   });
   const [uploads, setUploads] = useState([]);
-  const [sessions, setSessions] = useState(initialSessions);
-  const [activeSessionId, setActiveSessionId] = useState(initialSessions[0]?.id || "");
+  const [sessions, setSessions] = useState(() => [createSession()]);
+  const [activeSessionId, setActiveSessionId] = useState("");
   const [mode, setMode] = useState("auto");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -422,15 +477,27 @@ function AppInner() {
   const recordingTimerRef = useRef(null);
   const authBootstrappedRef = useRef(false);
   const voicesRef = useRef([]);
+  const speechQueueRef = useRef([]);
+  const speechCancelledRef = useRef(false);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
     [sessions, activeSessionId]
   );
 
+  const storageUserId = user?.uid || "guest-workspace";
+
   useEffect(() => {
-    saveSessions(sessions);
-  }, [sessions]);
+    if (firebaseAuth && user === undefined && !authBootstrappedRef.current) return;
+    const loaded = loadSessions(storageUserId);
+    setSessions(loaded);
+    setActiveSessionId((current) => current || loaded[0]?.id || "");
+  }, [storageUserId, user]);
+
+  useEffect(() => {
+    if (firebaseAuth && user === undefined && !authBootstrappedRef.current) return;
+    saveSessions(sessions, storageUserId);
+  }, [sessions, storageUserId, user]);
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, preferredLanguage);
@@ -440,6 +507,19 @@ function AppInner() {
     if (!activeSession) return;
     setMode(activeSession.mode || "auto");
   }, [activeSession]);
+
+  useEffect(() => {
+    if (!sessions.length) {
+      const next = createSession();
+      setSessions([next]);
+      setActiveSessionId(next.id);
+      return;
+    }
+
+    if (!sessions.some((session) => session.id === activeSessionId)) {
+      setActiveSessionId(sessions[0].id);
+    }
+  }, [activeSessionId, sessions]);
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -529,10 +609,18 @@ function AppInner() {
     );
     const pool = matchingVoices.length ? matchingVoices : voices;
 
-    const preferred = pool.find((voice) =>
-      /google|samantha|serena|ava|allison|female|zira|aria/i.test(voice.name)
-    );
-    return preferred || pool[0] || voices[0];
+    const scoredVoices = pool
+      .map((voice) => {
+        let score = 0;
+        if (/google|microsoft|apple/i.test(voice.name)) score += 4;
+        if (/aria|zira|samantha|ava|serena|allison|moira|neural/i.test(voice.name)) score += 5;
+        if (/enhanced|premium|natural/i.test(voice.name)) score += 3;
+        if (!/compact|espeak|robot/i.test(voice.name)) score += 1;
+        return { voice, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return scoredVoices[0]?.voice || pool[0] || voices[0];
   }
 
   function speakText(text, messageId = "guru", languageHint = preferredLanguage) {
@@ -541,18 +629,39 @@ function AppInner() {
     try {
       const synth = window.speechSynthesis;
       if (!synth || typeof SpeechSynthesisUtterance === "undefined") return;
+      speechCancelledRef.current = false;
       synth.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
       const normalizedLanguage = normalizeLanguageTag(languageHint);
+      const chunks = chunkSpeechText(text);
       const voice = pickBestVoice(normalizedLanguage);
-      if (voice) utterance.voice = voice;
-      utterance.lang = normalizedLanguage;
-      utterance.rate = 1.02;
-      utterance.pitch = 1.02;
-      utterance.onstart = () => setSpeakingId(messageId);
-      utterance.onend = () => setSpeakingId(null);
-      utterance.onerror = () => setSpeakingId(null);
-      synth.speak(utterance);
+      speechQueueRef.current = chunks.slice();
+
+      const runNext = () => {
+        if (speechCancelledRef.current) {
+          setSpeakingId(null);
+          speechQueueRef.current = [];
+          return;
+        }
+
+        const nextChunk = speechQueueRef.current.shift();
+        if (!nextChunk) {
+          setSpeakingId(null);
+          return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(nextChunk);
+        if (voice) utterance.voice = voice;
+        utterance.lang = normalizedLanguage;
+        utterance.rate = /^en/i.test(normalizedLanguage) ? 0.96 : 0.92;
+        utterance.pitch = /^en/i.test(normalizedLanguage) ? 1 : 0.98;
+        utterance.volume = 1;
+        utterance.onstart = () => setSpeakingId(messageId);
+        utterance.onend = () => runNext();
+        utterance.onerror = () => runNext();
+        synth.speak(utterance);
+      };
+
+      runNext();
     } catch {
       setSpeakingId(null);
     }
@@ -561,6 +670,8 @@ function AppInner() {
   function stopSpeaking() {
     if (!voiceSupport.output) return;
     try {
+      speechCancelledRef.current = true;
+      speechQueueRef.current = [];
       window.speechSynthesis.cancel();
     } catch {
       // ignore
@@ -686,6 +797,24 @@ function AppInner() {
     setSessions((current) => [next, ...current]);
     setActiveSessionId(next.id);
     setDraft("");
+  }
+
+  function handleDeleteConversation(sessionId) {
+    setSessions((current) => {
+      const remaining = current.filter((session) => session.id !== sessionId);
+      if (!remaining.length) {
+        const replacement = createSession();
+        setActiveSessionId(replacement.id);
+        notify("Conversation deleted.", "success");
+        return [replacement];
+      }
+
+      if (sessionId === activeSessionId) {
+        setActiveSessionId(remaining[0].id);
+      }
+      notify("Conversation deleted.", "success");
+      return remaining;
+    });
   }
 
   async function handleFiles(fileList) {
@@ -990,6 +1119,21 @@ function AppInner() {
       />
 
       <div className="app-shell">
+        <div className="scene-backdrop" aria-hidden="true">
+          <div className="scene-aurora scene-aurora-a" />
+          <div className="scene-aurora scene-aurora-b" />
+          <div className="scene-grid" />
+          <div className="scene-rings">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="scene-monolith scene-monolith-a" />
+          <div className="scene-monolith scene-monolith-b" />
+          <div className="scene-orbital scene-orbital-a" />
+          <div className="scene-orbital scene-orbital-b" />
+        </div>
+
         <aside className="side-rail">
           <button className="brand-button" onClick={handleNewConversation}>
             <span className="brand-mark" />
@@ -998,6 +1142,18 @@ function AppInner() {
               <span>your guru</span>
             </div>
           </button>
+
+          <div className="account-card">
+            {user?.photoURL ? (
+              <img className="account-avatar image" src={user.photoURL} alt={user.displayName || "User"} />
+            ) : (
+              <div className="account-avatar">{getUserInitial(user)}</div>
+            )}
+            <div className="account-copy">
+              <strong>{user?.displayName || "Guest"}</strong>
+              <span>{user?.email || "local workspace mode"}</span>
+            </div>
+          </div>
 
           <button className="soft-button" onClick={() => setGuruOpen(true)}>
             Guru Mode
@@ -1044,14 +1200,26 @@ function AppInner() {
 
           <div className="history-list">
             {sessions.map((session) => (
-              <button
+              <div
                 key={session.id}
                 className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
-                onClick={() => setActiveSessionId(session.id)}
               >
-                <strong>{session.title}</strong>
-                <span>{formatDate(session.updatedAt)}</span>
-              </button>
+                <button
+                  className="history-item-main"
+                  onClick={() => setActiveSessionId(session.id)}
+                >
+                  <strong>{session.title}</strong>
+                  <span>{formatDate(session.updatedAt)}</span>
+                </button>
+                <button
+                  className="history-delete"
+                  onClick={() => handleDeleteConversation(session.id)}
+                  aria-label={`Delete ${session.title}`}
+                  title="Delete conversation"
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
 
@@ -1111,6 +1279,11 @@ function AppInner() {
           <section className="conversation-root">
             {messages.length === 0 ? (
               <div className="welcome-shell">
+                <div className="welcome-meta">
+                  <span>Adaptive tutor</span>
+                  <span>Human voice flow</span>
+                  <span>Deep study companion</span>
+                </div>
                 <div className="welcome-orb" onClick={() => setGuruOpen(true)}>
                   <div className="welcome-orb-core" />
                 </div>
@@ -1118,6 +1291,20 @@ function AppInner() {
                 <p>
                   Ask anything. Upload your notes. Speak if you want. Keep it simple.
                 </p>
+                <div className="welcome-stat-row">
+                  <div className="welcome-stat">
+                    <strong>{documentStats.total_documents}</strong>
+                    <span>Knowledge files</span>
+                  </div>
+                  <div className="welcome-stat">
+                    <strong>{sessions.length}</strong>
+                    <span>Conversations</span>
+                  </div>
+                  <div className="welcome-stat">
+                    <strong>{getLanguageLabel(preferredLanguage)}</strong>
+                    <span>Voice language</span>
+                  </div>
+                </div>
                 <div className="suggestion-row">
                   {SUGGESTIONS.map((suggestion) => (
                     <button
