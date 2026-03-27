@@ -105,6 +105,55 @@ RESEARCH MODE:
 """,
 }
 
+FOCUS_PROFILES = {
+    "adaptive": """
+ADAPTIVE FOCUS:
+- Choose the most helpful working mode automatically.
+- Keep the answer natural, polished, and high-signal.
+""",
+    "study": """
+STUDY FOCUS:
+- Teach like an excellent tutor.
+- Break ideas into understandable parts.
+- Use mini-structure, examples, and clean summaries.
+""",
+    "build": """
+BUILD FOCUS:
+- Think like a strong product engineer.
+- Favor practical output, implementation clarity, and working deliverables.
+""",
+    "research": """
+RESEARCH FOCUS:
+- Investigate carefully and synthesize evidence.
+- Surface assumptions, tradeoffs, and stronger options.
+""",
+    "wellbeing": """
+WELLBEING FOCUS:
+- Respond with calm, supportive language.
+- Stay practical, warm, and emotionally intelligent.
+""",
+}
+
+RESPONSE_STYLES = {
+    "balanced": """
+STYLE:
+- Default to polished, concise answers with clear structure when needed.
+""",
+    "deep": """
+STYLE:
+- Go deeper with stronger structure, better explanation, and more context.
+""",
+    "concise": """
+STYLE:
+- Keep answers compact, sharp, and direct.
+""",
+    "artifact": """
+STYLE:
+- When the user asks for code, writing, plans, or structured output, present it in a workspace-friendly way.
+- Prefer one strong result over multiple rough drafts.
+""",
+}
+
 LANGUAGE_NAMES = {
     "en": "English",
     "hi": "Hindi",
@@ -230,6 +279,13 @@ LANGUAGE MODE:
 - For multilingual questions, follow the main language of the latest user message.
 """
     return instruction.strip(), language_code
+
+def build_preference_instruction(focus="adaptive", response_style="balanced"):
+    focus_key = (focus or "adaptive").strip().lower()
+    style_key = (response_style or "balanced").strip().lower()
+    focus_instruction = FOCUS_PROFILES.get(focus_key, FOCUS_PROFILES["adaptive"])
+    style_instruction = RESPONSE_STYLES.get(style_key, RESPONSE_STYLES["balanced"])
+    return (focus_instruction.strip() + "\n\n" + style_instruction.strip()).strip()
 
 async def search_web(query):
     print(f"[SEARCH] Query: {query}")
@@ -444,13 +500,21 @@ def build_search_context(sr, query):
         ctx += "Answer using results. Cite [1][2] etc. No tool JSON."
     return ctx, sources
 
-async def stream_agentic(question, user_id, context_docs="", preferred_language="auto"):
+async def stream_agentic(
+    question,
+    user_id,
+    context_docs="",
+    preferred_language="auto",
+    focus="adaptive",
+    response_style="balanced",
+):
     history = get_history(user_id)
     system, task_profile = build_dynamic_system(question, context_docs)
     language_instruction, response_language = build_language_instruction(
         question, preferred_language, context_docs
     )
-    system = system + "\n\n" + language_instruction
+    preference_instruction = build_preference_instruction(focus, response_style)
+    system = system + "\n\n" + language_instruction + "\n\n" + preference_instruction
     sources = []
 
     if context_docs:
@@ -592,13 +656,21 @@ async def stream_agentic(question, user_id, context_docs="", preferred_language=
     add_history(user_id, "assistant", clean[:1500] or full[:1500])
     yield "data: [DONE]\n\n"
 
-async def ask_agentic(question, user_id, context_docs="", preferred_language="auto"):
+async def ask_agentic(
+    question,
+    user_id,
+    context_docs="",
+    preferred_language="auto",
+    focus="adaptive",
+    response_style="balanced",
+):
     history = get_history(user_id)
     system, _task_profile = build_dynamic_system(question, context_docs)
     language_instruction, response_language = build_language_instruction(
         question, preferred_language, context_docs
     )
-    system = system + "\n\n" + language_instruction
+    preference_instruction = build_preference_instruction(focus, response_style)
+    system = system + "\n\n" + language_instruction + "\n\n" + preference_instruction
     if context_docs: system = system + "\n\nDOCUMENT:\n" + context_docs
     messages = [{"role":"system","content":system}]
     messages.extend(history[-10:])
@@ -609,12 +681,36 @@ async def ask_agentic(question, user_id, context_docs="", preferred_language="au
     add_history(user_id,"assistant",answer)
     return {"answer":answer,"sources":[],"language":response_language}
 
-async def stream_general(question, user_id, preferred_language="auto"):
-    async for chunk in stream_agentic(question, user_id, preferred_language=preferred_language):
+async def stream_general(
+    question,
+    user_id,
+    preferred_language="auto",
+    focus="adaptive",
+    response_style="balanced",
+):
+    async for chunk in stream_agentic(
+        question,
+        user_id,
+        preferred_language=preferred_language,
+        focus=focus,
+        response_style=response_style,
+    ):
         yield chunk
 
-async def ask_general(question, user_id, preferred_language="auto"):
-    return await ask_agentic(question, user_id, preferred_language=preferred_language)
+async def ask_general(
+    question,
+    user_id,
+    preferred_language="auto",
+    focus="adaptive",
+    response_style="balanced",
+):
+    return await ask_agentic(
+        question,
+        user_id,
+        preferred_language=preferred_language,
+        focus=focus,
+        response_style=response_style,
+    )
 
 # ── Real RAG ──────────────────────────────────────────────────────────────────
 try:

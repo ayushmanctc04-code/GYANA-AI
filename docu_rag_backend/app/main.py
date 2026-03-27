@@ -50,6 +50,8 @@ class AskRequest(BaseModel):
     context: Optional[str] = None
     mode: Literal["auto", "general", "docs"] = "auto"
     language: str = "auto"
+    focus: str = "adaptive"
+    response_style: str = "balanced"
 
 
 class ClearRequest(BaseModel):
@@ -133,11 +135,24 @@ async def ask_stream(req: AskRequest):
 
     async def generate():
         if req.mode == "general":
-            async for chunk in stream_general(req.question, req.user_id, req.language):
+            async for chunk in stream_general(
+                req.question,
+                req.user_id,
+                req.language,
+                req.focus,
+                req.response_style,
+            ):
                 yield chunk
             return
 
-        async for chunk in stream_agentic(req.question, req.user_id, context_docs, req.language):
+        async for chunk in stream_agentic(
+            req.question,
+            req.user_id,
+            context_docs,
+            req.language,
+            req.focus,
+            req.response_style,
+        ):
             yield chunk
 
     return _stream_response(generate())
@@ -146,7 +161,13 @@ async def ask_stream(req: AskRequest):
 @app.post("/ask-general/stream")
 async def ask_general_stream(req: AskRequest):
     async def generate():
-        async for chunk in stream_general(req.question, req.user_id, req.language):
+        async for chunk in stream_general(
+            req.question,
+            req.user_id,
+            req.language,
+            req.focus,
+            req.response_style,
+        ):
             yield chunk
 
     return _stream_response(generate())
@@ -156,13 +177,32 @@ async def ask_general_stream(req: AskRequest):
 async def ask(req: AskRequest):
     context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
     if req.mode == "general":
-        return await ask_general(req.question, req.user_id, req.language)
-    return await ask_agentic(req.question, req.user_id, context_docs, req.language)
+        return await ask_general(
+            req.question,
+            req.user_id,
+            req.language,
+            req.focus,
+            req.response_style,
+        )
+    return await ask_agentic(
+        req.question,
+        req.user_id,
+        context_docs,
+        req.language,
+        req.focus,
+        req.response_style,
+    )
 
 
 @app.post("/ask-general")
 async def ask_general_ep(req: AskRequest):
-    return await ask_general(req.question, req.user_id, req.language)
+    return await ask_general(
+        req.question,
+        req.user_id,
+        req.language,
+        req.focus,
+        req.response_style,
+    )
 
 
 @app.post("/upload")

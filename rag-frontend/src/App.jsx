@@ -22,6 +22,8 @@ import {
 
 const CHAT_STORAGE_KEY = "gyana.workspace.sessions";
 const LANGUAGE_STORAGE_KEY = "gyana.workspace.language";
+const FOCUS_STORAGE_KEY = "gyana.workspace.focus";
+const STYLE_STORAGE_KEY = "gyana.workspace.responseStyle";
 const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 const GURU_PROMPT_PREFIX =
   "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
@@ -57,6 +59,21 @@ const LANGUAGE_OPTIONS = [
   { value: "ar", label: "Arabic" },
   { value: "zh", label: "Chinese" },
   { value: "ja", label: "Japanese" },
+];
+
+const FOCUS_PRESETS = [
+  { value: "adaptive", label: "Adaptive", blurb: "Auto-picks the best working mode." },
+  { value: "study", label: "Study", blurb: "Tutor-style explanations and learning help." },
+  { value: "build", label: "Build", blurb: "Code, product, and implementation focus." },
+  { value: "research", label: "Research", blurb: "Sharper analysis and stronger synthesis." },
+  { value: "wellbeing", label: "Wellbeing", blurb: "Warm guidance and grounded support." },
+];
+
+const RESPONSE_STYLE_OPTIONS = [
+  { value: "balanced", label: "Balanced" },
+  { value: "deep", label: "Deep" },
+  { value: "concise", label: "Concise" },
+  { value: "artifact", label: "Artifact" },
 ];
 
 const firebaseConfig = {
@@ -110,6 +127,14 @@ function loadPreferredLanguage() {
   }
 }
 
+function loadStoredValue(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeLanguageTag(language) {
   if (!language) return "en-US";
   const value = String(language).replace("_", "-").trim();
@@ -145,6 +170,14 @@ function normalizeLanguageTag(language) {
 
 function getLanguageLabel(language) {
   return LANGUAGE_OPTIONS.find((option) => option.value === language)?.label || "Auto";
+}
+
+function getFocusLabel(focus) {
+  return FOCUS_PRESETS.find((option) => option.value === focus)?.label || "Adaptive";
+}
+
+function getStyleLabel(style) {
+  return RESPONSE_STYLE_OPTIONS.find((option) => option.value === style)?.label || "Balanced";
 }
 
 function getUserInitial(user) {
@@ -256,6 +289,19 @@ function normalizeAssistantText(text) {
     .replace(/([.!?])(\*\*[^*]+\*\*)/g, "$1\n\n$2")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function extractCodeArtifacts(text) {
+  const blocks = String(text || "").split(/```/);
+  const artifacts = [];
+  for (let index = 1; index < blocks.length; index += 2) {
+    const [maybeLang, ...rest] = blocks[index].split("\n");
+    artifacts.push({
+      language: maybeLang.trim() || "code",
+      code: rest.join("\n").trim(),
+    });
+  }
+  return artifacts.filter((item) => item.code);
 }
 
 function renderTextBlock(lines, blockIndex) {
@@ -510,6 +556,12 @@ function AppInner() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [guruOpen, setGuruOpen] = useState(false);
   const [preferredLanguage, setPreferredLanguage] = useState(() => loadPreferredLanguage());
+  const [focusPreset, setFocusPreset] = useState(() =>
+    loadStoredValue(FOCUS_STORAGE_KEY, "adaptive")
+  );
+  const [responseStyle, setResponseStyle] = useState(() =>
+    loadStoredValue(STYLE_STORAGE_KEY, "balanced")
+  );
   const [speechEnabled, setSpeechEnabled] = useState(true);
   const [voiceSupport, setVoiceSupport] = useState({
     input: false,
@@ -553,6 +605,14 @@ function AppInner() {
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, preferredLanguage);
   }, [preferredLanguage]);
+
+  useEffect(() => {
+    localStorage.setItem(FOCUS_STORAGE_KEY, focusPreset);
+  }, [focusPreset]);
+
+  useEffect(() => {
+    localStorage.setItem(STYLE_STORAGE_KEY, responseStyle);
+  }, [responseStyle]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -1030,6 +1090,8 @@ function AppInner() {
         userId: user.uid,
         mode: chosenMode,
         language: preferredLanguage,
+        focus: focusPreset,
+        responseStyle,
         onEvent: (event) => {
           if (event.type === "status") {
             setStatus(event.value);
@@ -1087,6 +1149,8 @@ function AppInner() {
           userId: user.uid,
           mode: chosenMode,
           language: preferredLanguage,
+          focus: focusPreset,
+          responseStyle,
         });
         patchMessage(assistant.id, {
           text: data.answer || fallbackMessage,
@@ -1249,6 +1313,10 @@ function AppInner() {
   }
 
   const messages = activeSession?.messages || [];
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.text);
+  const latestArtifacts = extractCodeArtifacts(latestAssistantMessage?.text || "");
 
   return (
     <>
@@ -1390,6 +1458,16 @@ function AppInner() {
               </p>
             </div>
             <div className="header-actions">
+              <label className="language-picker compact">
+                <span>Focus</span>
+                <select value={focusPreset} onChange={(event) => setFocusPreset(event.target.value)}>
+                  {FOCUS_PRESETS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="language-picker">
                 <span>Language</span>
                 <select
@@ -1397,6 +1475,16 @@ function AppInner() {
                   onChange={(event) => setPreferredLanguage(event.target.value)}
                 >
                   {LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="language-picker compact">
+                <span>Style</span>
+                <select value={responseStyle} onChange={(event) => setResponseStyle(event.target.value)}>
+                  {RESPONSE_STYLE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -1418,9 +1506,23 @@ function AppInner() {
             </div>
           </header>
 
-          <section className="conversation-root">
-            {messages.length === 0 ? (
-              <div className="welcome-shell">
+          <div className="workspace-strip">
+            {FOCUS_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                className={`workspace-chip ${focusPreset === preset.value ? "active" : ""}`}
+                onClick={() => setFocusPreset(preset.value)}
+              >
+                <strong>{preset.label}</strong>
+                <span>{preset.blurb}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="chat-layout">
+            <section className="conversation-root">
+              {messages.length === 0 ? (
+                <div className="welcome-shell">
                 <div className="welcome-meta">
                   <span>Adaptive tutor</span>
                   <span>Human voice flow</span>
@@ -1458,68 +1560,121 @@ function AppInner() {
                     </button>
                   ))}
                 </div>
-              </div>
-            ) : (
-              <div className="message-flow">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`message-turn ${message.role === "user" ? "user" : "assistant"}`}
-                  >
-                    <div className="message-label">
-                      <span>{message.role === "user" ? "You" : "Gyana"}</span>
-                      <span>
-                        {message.role === "assistant" && message.language
-                          ? `${getLanguageLabel(message.language)} • ${formatTime(message.createdAt)}`
-                          : formatTime(message.createdAt)}
-                      </span>
-                    </div>
-                    <div className={`message-content ${message.error ? "error" : ""}`}>
-                      {message.text ? (
-                        <MessageContent text={message.text} />
-                      ) : message.streaming ? (
-                        <div className="typing-row">
-                          <span />
-                          <span />
-                          <span />
+                </div>
+              ) : (
+                <div className="message-flow">
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`message-turn ${message.role === "user" ? "user" : "assistant"}`}
+                    >
+                      <div className="message-label">
+                        <span>{message.role === "user" ? "You" : "Gyana"}</span>
+                        <span>
+                          {message.role === "assistant" && message.language
+                            ? `${getLanguageLabel(message.language)} • ${formatTime(message.createdAt)}`
+                            : formatTime(message.createdAt)}
+                        </span>
+                      </div>
+                      <div className={`message-content ${message.error ? "error" : ""}`}>
+                        {message.text ? (
+                          <MessageContent text={message.text} />
+                        ) : message.streaming ? (
+                          <div className="typing-row">
+                            <span />
+                            <span />
+                            <span />
+                          </div>
+                        ) : null}
+                      </div>
+                      {message.sources?.length ? (
+                        <div className="source-row">
+                          {message.sources.map((source, index) => (
+                            <span key={`${message.id}-${index}`} className="source-chip">
+                              {source.title || source}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {message.role === "assistant" && message.text ? (
+                        <div className="message-tools">
+                          <button
+                            className="text-button small"
+                            onClick={() =>
+                              speakingId === message.id
+                                ? stopSpeaking()
+                                : speakText(message.text, message.id, message.language || preferredLanguage)
+                            }
+                          >
+                            {speakingId === message.id ? "Stop voice" : "Listen"}
+                          </button>
+                          <button
+                            className="text-button small"
+                            onClick={() => copyText(message.text)}
+                          >
+                            Copy
+                          </button>
                         </div>
                       ) : null}
                     </div>
-                    {message.sources?.length ? (
-                      <div className="source-row">
-                        {message.sources.map((source, index) => (
-                          <span key={`${message.id}-${index}`} className="source-chip">
-                            {source.title || source}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {message.role === "assistant" && message.text ? (
-                      <div className="message-tools">
-                        <button
-                          className="text-button small"
-                          onClick={() =>
-                            speakingId === message.id
-                              ? stopSpeaking()
-                              : speakText(message.text, message.id, message.language || preferredLanguage)
-                          }
-                        >
-                          {speakingId === message.id ? "Stop voice" : "Listen"}
-                        </button>
-                        <button
-                          className="text-button small"
-                          onClick={() => copyText(message.text)}
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    ) : null}
+                  ))}
+                  <div ref={messageEndRef} />
+                </div>
+              )}
+            </section>
+
+            <aside className="workspace-panel">
+              <div className="workspace-card">
+                <div className="workspace-label">Project Context</div>
+                <h3>Session setup</h3>
+                <div className="workspace-metrics">
+                  <div>
+                    <strong>{documentStats.total_documents}</strong>
+                    <span>Docs</span>
                   </div>
-                ))}
-                <div ref={messageEndRef} />
+                  <div>
+                    <strong>{getFocusLabel(focusPreset)}</strong>
+                    <span>Focus</span>
+                  </div>
+                  <div>
+                    <strong>{getStyleLabel(responseStyle)}</strong>
+                    <span>Style</span>
+                  </div>
+                </div>
               </div>
-            )}
-          </section>
+
+              <div className="workspace-card">
+                <div className="workspace-label">Artifacts</div>
+                <h3>Latest generated output</h3>
+                {latestArtifacts.length ? (
+                  <div className="artifact-stack">
+                    {latestArtifacts.slice(0, 2).map((artifact, index) => (
+                      <button
+                        key={`${artifact.language}-${index}`}
+                        className="artifact-item"
+                        onClick={() => copyText(artifact.code)}
+                      >
+                        <strong>{artifact.language}</strong>
+                        <span>{artifact.code.slice(0, 120) || "Generated code block"}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="workspace-copy">
+                    Code blocks, structured output, and generated assets will show up here like a mini artifact workspace.
+                  </p>
+                )}
+              </div>
+
+              <div className="workspace-card">
+                <div className="workspace-label">Response DNA</div>
+                <h3>Best-of AI behavior</h3>
+                <p className="workspace-copy">
+                  ChatGPT-style polish, Claude-style workspace output, and Gemini-style reusable focus presets are now part of this session.
+                </p>
+              </div>
+            </aside>
+          </div>
 
           <footer className="composer-wrap">
             <div className="composer-shell">

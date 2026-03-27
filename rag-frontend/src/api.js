@@ -91,13 +91,22 @@ export async function transcribeOnly(blob, userId) {
   return data;
 }
 
-export async function askOnce({ question, userId, mode = "auto", language = "auto" }) {
+export async function askOnce({
+  question,
+  userId,
+  mode = "auto",
+  language = "auto",
+  focus = "adaptive",
+  responseStyle = "balanced",
+}) {
   try {
     const { data } = await axios.post(`${API_BASE}/ask`, {
       question,
       user_id: userId,
       mode,
       language,
+      focus,
+      response_style: responseStyle,
     });
     return data;
   } catch (error) {
@@ -110,6 +119,8 @@ export async function streamAssistant({
   userId,
   mode = "auto",
   language = "auto",
+  focus = "adaptive",
+  responseStyle = "balanced",
   onEvent,
 }) {
   const response = await fetch(`${API_BASE}/ask/stream`, {
@@ -123,6 +134,8 @@ export async function streamAssistant({
       user_id: userId,
       mode,
       language,
+      focus,
+      response_style: responseStyle,
     }),
   });
 
