@@ -76,6 +76,11 @@ CODING MODE:
 - Prefer complete, runnable solutions.
 - When giving code, explain the approach briefly and keep code high quality.
 - For frontend code, ensure the output is preview-friendly when possible.
+- Format coding answers cleanly:
+  1. one short intro sentence,
+  2. one complete code block when a single-file solution is appropriate,
+  3. a short "How it works" or "Next steps" section only if useful.
+- Do not dump raw markdown fragments or multiple half-structured sections unless the user explicitly asks for a multi-file breakdown.
 """,
     "mentor": """
 GUIDANCE MODE:
@@ -88,6 +93,9 @@ DOCUMENT MODE:
 - Ground the answer in the supplied context whenever possible.
 - Summarize clearly, cite the relevant source names when useful, and do not invent content.
 - If the document context is incomplete, say so plainly.
+- Rewrite extracted material into clean prose or clean lists instead of dumping raw source text.
+- Avoid markdown artifacts like stray **, repeated headings, or copied outline fragments.
+- When solving from a file, organize the answer into readable sections and direct answers.
 """,
     "researcher": """
 RESEARCH MODE:

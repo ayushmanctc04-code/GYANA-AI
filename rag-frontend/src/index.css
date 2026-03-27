@@ -712,7 +712,9 @@ textarea {
 .message-markdown p,
 .message-markdown h2,
 .message-markdown h3,
-.message-markdown h4 {
+.message-markdown h4,
+.message-markdown ul,
+.message-markdown ol {
   margin: 0 0 12px;
 }
 
@@ -742,6 +744,23 @@ textarea {
 
 .message-gap {
   height: 6px;
+}
+
+.message-markdown strong {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.message-markdown em {
+  font-style: italic;
+}
+
+.message-list {
+  padding-left: 1.35rem;
+}
+
+.message-list li {
+  margin-bottom: 0.45rem;
 }
 
 .inline-code {

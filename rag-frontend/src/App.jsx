@@ -228,8 +228,8 @@ function fileLabel(name) {
 }
 
 function renderInline(text) {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.map((part, index) => {
+  const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return tokens.filter(Boolean).map((part, index) => {
     if (part.startsWith("`") && part.endsWith("`")) {
       return (
         <code key={`${part}-${index}`} className="inline-code">
@@ -237,12 +237,103 @@ function renderInline(text) {
         </code>
       );
     }
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("*") && part.endsWith("*")) {
+      return <em key={`${part}-${index}`}>{part.slice(1, -1)}</em>;
+    }
     return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
   });
 }
 
+function normalizeAssistantText(text) {
+  return String(text || "")
+    .replace(/```([a-zA-Z0-9#+-]+)(?=\S)/g, "```$1\n")
+    .replace(/(\*\*[^*]+\*\*)(?=[A-Za-z])/g, "$1\n")
+    .replace(/(\d+\.\s+\*\*[^*]+\*\*:?)\s*/g, "\n$1 ")
+    .replace(/(\*\*[^*]+\*\*:)\s*(?=[A-Za-z])/g, "\n$1 ")
+    .replace(/([.!?])(\*\*[^*]+\*\*)/g, "$1\n\n$2")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function renderTextBlock(lines, blockIndex) {
+  const content = [];
+  let listItems = [];
+  let listType = null;
+
+  const flushList = (keySuffix) => {
+    if (!listItems.length) return;
+    const ListTag = listType === "ol" ? "ol" : "ul";
+    content.push(
+      <ListTag key={`list-${blockIndex}-${keySuffix}`} className={`message-list ${listType}`}>
+        {listItems.map((item, index) => (
+          <li key={`item-${blockIndex}-${keySuffix}-${index}`}>{renderInline(item)}</li>
+        ))}
+      </ListTag>
+    );
+    listItems = [];
+    listType = null;
+  };
+
+  lines.forEach((line, lineIndex) => {
+    const key = `line-${blockIndex}-${lineIndex}`;
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushList(lineIndex);
+      content.push(<div key={key} className="message-gap" />);
+      return;
+    }
+
+    if (trimmed.startsWith("### ")) {
+      flushList(lineIndex);
+      content.push(<h4 key={key}>{renderInline(trimmed.slice(4))}</h4>);
+      return;
+    }
+    if (trimmed.startsWith("## ")) {
+      flushList(lineIndex);
+      content.push(<h3 key={key}>{renderInline(trimmed.slice(3))}</h3>);
+      return;
+    }
+    if (trimmed.startsWith("# ")) {
+      flushList(lineIndex);
+      content.push(<h2 key={key}>{renderInline(trimmed.slice(2))}</h2>);
+      return;
+    }
+
+    const numberedMatch = trimmed.match(/^\d+\.\s+(.*)$/);
+    if (numberedMatch) {
+      if (listType && listType !== "ol") {
+        flushList(lineIndex);
+      }
+      listType = "ol";
+      listItems.push(numberedMatch[1]);
+      return;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.*)$/);
+    if (bulletMatch) {
+      if (listType && listType !== "ul") {
+        flushList(lineIndex);
+      }
+      listType = "ul";
+      listItems.push(bulletMatch[1]);
+      return;
+    }
+
+    flushList(lineIndex);
+    content.push(<p key={key}>{renderInline(trimmed)}</p>);
+  });
+
+  flushList("final");
+  return content;
+}
+
 function MessageContent({ text }) {
-  const blocks = text.split(/```/);
+  const normalizedText = normalizeAssistantText(text);
+  const blocks = normalizedText.split(/```/);
   return (
     <div className="message-markdown">
       {blocks.map((block, index) => {
@@ -253,17 +344,10 @@ function MessageContent({ text }) {
           return <CodeBlock key={`code-${index}`} language={language} code={code} />;
         }
 
-        return block
+        const lines = block
           .split("\n")
-          .filter((line, lineIndex, source) => !(lineIndex === source.length - 1 && !line.trim()))
-          .map((line, lineIndex) => {
-            const key = `line-${index}-${lineIndex}`;
-            if (!line.trim()) return <div key={key} className="message-gap" />;
-            if (line.startsWith("### ")) return <h4 key={key}>{line.slice(4)}</h4>;
-            if (line.startsWith("## ")) return <h3 key={key}>{line.slice(3)}</h3>;
-            if (line.startsWith("# ")) return <h2 key={key}>{line.slice(2)}</h2>;
-            return <p key={key}>{renderInline(line)}</p>;
-          });
+          .filter((line, lineIndex, source) => !(lineIndex === source.length - 1 && !line.trim()));
+        return renderTextBlock(lines, index);
       })}
     </div>
   );
