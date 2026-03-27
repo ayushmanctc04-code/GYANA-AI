@@ -362,8 +362,36 @@ def detect_intent(msg):
         "logo","banner","illustration","show me a","visualise"]): return "image"
     return "general"
 
+def question_targets_documents(question):
+    q = question.lower()
+    return any(
+        phrase in q
+        for phrase in [
+            "pdf",
+            "doc",
+            "docx",
+            "document",
+            "file",
+            "notes",
+            "ppt",
+            "pptx",
+            "slide",
+            "slides",
+            "assignment",
+            "uploaded",
+            "upload",
+            "attached",
+            "solve this",
+            "solve it",
+            "from the pdf",
+            "from my file",
+        ]
+    )
+
 def detect_task_profile(question, has_docs=False):
     q = question.lower()
+    if has_docs and question_targets_documents(question):
+        return "document_analyst"
     if any(word in q for word in ["code", "build", "bug", "debug", "function", "component", "script", "api", "program"]):
         return "coder"
     if any(word in q for word in ["teach", "explain", "lesson", "understand", "quiz", "study", "revise", "teacher", "learn"]):
@@ -384,8 +412,14 @@ def build_dynamic_system(question, context_docs=""):
         extra = (
             "\n\nDOCUMENT CONTEXT IS AVAILABLE:\n"
             "Decide whether the answer should rely on the uploaded material, general reasoning, or both. "
-            "If the user is clearly asking about their uploaded files, prioritize the documents."
+            "If the user is clearly asking about their uploaded files, prioritize the documents and answer directly from them."
         )
+        if question_targets_documents(question):
+            extra += (
+                "\nThe user is referring to uploaded material right now. "
+                "Do not ask whether they mean the PDF or file unless the request is truly ambiguous. "
+                "Use the available document context immediately."
+            )
     return SYSTEM + "\n\n" + task_instructions + extra, task_profile
 
 def build_search_context(sr, query):

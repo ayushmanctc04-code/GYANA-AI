@@ -163,6 +163,9 @@ function stripMarkdownForSpeech(text) {
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/[_~]/g, "")
+    .replace(/[()[\]{}<>|]/g, " ")
+    .replace(/[/:;]+/g, ", ")
+    .replace(/[•·]+/g, " ")
     .replace(/\bhttps?:\/\/\S+/gi, " ")
     .replace(/\s+/g, " ")
     .replace(/\s+([,.!?;:])/g, "$1")
@@ -867,13 +870,15 @@ function AppInner() {
     refreshDocumentStats(user.uid);
   }
 
-  async function runStream(question, chosenMode = mode) {
+  async function runStream(question, chosenMode = mode, options = {}) {
     if (!question.trim() || busy || !user?.uid) return;
+    const visibleQuestion = options.displayQuestion?.trim() || question;
+    const shouldSpeak = !!options.speakResponse;
 
     const userMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      text: question,
+      text: visibleQuestion,
       createdAt: new Date().toISOString(),
     };
     const assistant = createAssistantMessage();
@@ -935,7 +940,7 @@ function AppInner() {
           if (event.type === "done") {
             patchMessage(assistant.id, { streaming: false });
             setStatus("Ready");
-            if (collectedText.trim()) {
+            if (shouldSpeak && collectedText.trim()) {
               setTimeout(() => speakText(collectedText, assistant.id, responseLanguage), 120);
             }
           }
@@ -956,7 +961,7 @@ function AppInner() {
           streaming: false,
           language: data.language || responseLanguage,
         });
-        if (data.answer) {
+        if (shouldSpeak && data.answer) {
           setTimeout(() => speakText(data.answer, assistant.id, data.language || responseLanguage), 120);
         }
       } catch {
@@ -1004,7 +1009,11 @@ function AppInner() {
             return;
           }
           setGuruOpen(false);
-          await runStream(`${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`, "general");
+          await runStream(
+            `${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`,
+            "general",
+            { displayQuestion: spokenText, speakResponse: true }
+          );
         } catch (error) {
           notify(toErrorMessage(error, "Guru mode could not process voice."), "error");
         }

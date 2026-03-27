@@ -213,7 +213,7 @@ export async function streamAssistant({
       const lines = segment
         .split("\n")
         .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart());
+        .map((line) => (line.startsWith("data: ") ? line.slice(6) : line.slice(5)));
 
       for (const line of lines) {
         emitData(line);
