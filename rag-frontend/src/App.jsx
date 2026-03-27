@@ -1317,6 +1317,7 @@ function AppInner() {
     .reverse()
     .find((message) => message.role === "assistant" && message.text);
   const latestArtifacts = extractCodeArtifacts(latestAssistantMessage?.text || "");
+  const showWorkspacePanel = messages.length > 0 && latestArtifacts.length > 0;
 
   return (
     <>
@@ -1458,16 +1459,6 @@ function AppInner() {
               </p>
             </div>
             <div className="header-actions">
-              <label className="language-picker compact">
-                <span>Focus</span>
-                <select value={focusPreset} onChange={(event) => setFocusPreset(event.target.value)}>
-                  {FOCUS_PRESETS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label className="language-picker">
                 <span>Language</span>
                 <select
@@ -1475,16 +1466,6 @@ function AppInner() {
                   onChange={(event) => setPreferredLanguage(event.target.value)}
                 >
                   {LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="language-picker compact">
-                <span>Style</span>
-                <select value={responseStyle} onChange={(event) => setResponseStyle(event.target.value)}>
-                  {RESPONSE_STYLE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -1506,60 +1487,34 @@ function AppInner() {
             </div>
           </header>
 
-          <div className="workspace-strip">
-            {FOCUS_PRESETS.map((preset) => (
-              <button
-                key={preset.value}
-                className={`workspace-chip ${focusPreset === preset.value ? "active" : ""}`}
-                onClick={() => setFocusPreset(preset.value)}
-              >
-                <strong>{preset.label}</strong>
-                <span>{preset.blurb}</span>
-              </button>
-            ))}
+          <div className={`session-summary ${messages.length ? "compact" : ""}`}>
+            <span>{getFocusLabel(focusPreset)}</span>
+            <span>{getStyleLabel(responseStyle)}</span>
+            <span>{documentStats.total_documents} docs</span>
           </div>
 
-          <div className="chat-layout">
+          <div className={`chat-layout ${showWorkspacePanel ? "" : "single"}`}>
             <section className="conversation-root">
               {messages.length === 0 ? (
                 <div className="welcome-shell">
-                <div className="welcome-meta">
-                  <span>Adaptive tutor</span>
-                  <span>Human voice flow</span>
-                  <span>Deep study companion</span>
-                </div>
-                <div className="welcome-orb" onClick={() => setGuruOpen(true)}>
-                  <div className="welcome-orb-core" />
-                </div>
-                <h1>Hey Guru</h1>
-                <p>
-                  Ask anything. Upload your notes. Speak if you want. Keep it simple.
-                </p>
-                <div className="welcome-stat-row">
-                  <div className="welcome-stat">
-                    <strong>{documentStats.total_documents}</strong>
-                    <span>Knowledge files</span>
+                  <div className="welcome-orb" onClick={() => setGuruOpen(true)}>
+                    <div className="welcome-orb-core" />
                   </div>
-                  <div className="welcome-stat">
-                    <strong>{sessions.length}</strong>
-                    <span>Conversations</span>
+                  <h1>Hey Guru</h1>
+                  <p>
+                    Ask anything. Upload your notes. Speak if you want. Keep it simple.
+                  </p>
+                  <div className="suggestion-row">
+                    {SUGGESTIONS.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        className="suggestion-chip"
+                        onClick={() => runStream(suggestion, mode)}
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
                   </div>
-                  <div className="welcome-stat">
-                    <strong>{getLanguageLabel(preferredLanguage)}</strong>
-                    <span>Voice language</span>
-                  </div>
-                </div>
-                <div className="suggestion-row">
-                  {SUGGESTIONS.map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      className="suggestion-chip"
-                      onClick={() => runStream(suggestion, mode)}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
                 </div>
               ) : (
                 <div className="message-flow">
@@ -1623,30 +1578,11 @@ function AppInner() {
               )}
             </section>
 
-            <aside className="workspace-panel">
-              <div className="workspace-card">
-                <div className="workspace-label">Project Context</div>
-                <h3>Session setup</h3>
-                <div className="workspace-metrics">
-                  <div>
-                    <strong>{documentStats.total_documents}</strong>
-                    <span>Docs</span>
-                  </div>
-                  <div>
-                    <strong>{getFocusLabel(focusPreset)}</strong>
-                    <span>Focus</span>
-                  </div>
-                  <div>
-                    <strong>{getStyleLabel(responseStyle)}</strong>
-                    <span>Style</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="workspace-card">
-                <div className="workspace-label">Artifacts</div>
-                <h3>Latest generated output</h3>
-                {latestArtifacts.length ? (
+            {showWorkspacePanel ? (
+              <aside className="workspace-panel">
+                <div className="workspace-card">
+                  <div className="workspace-label">Artifacts</div>
+                  <h3>Latest generated output</h3>
                   <div className="artifact-stack">
                     {latestArtifacts.slice(0, 2).map((artifact, index) => (
                       <button
@@ -1659,21 +1595,9 @@ function AppInner() {
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <p className="workspace-copy">
-                    Code blocks, structured output, and generated assets will show up here like a mini artifact workspace.
-                  </p>
-                )}
-              </div>
-
-              <div className="workspace-card">
-                <div className="workspace-label">Response DNA</div>
-                <h3>Best-of AI behavior</h3>
-                <p className="workspace-copy">
-                  ChatGPT-style polish, Claude-style workspace output, and Gemini-style reusable focus presets are now part of this session.
-                </p>
-              </div>
-            </aside>
+                </div>
+              </aside>
+            ) : null}
           </div>
 
           <footer className="composer-wrap">
