@@ -809,8 +809,11 @@ function AppInner() {
       .map((voice) => {
         let score = 0;
         if (/google|microsoft|apple/i.test(voice.name)) score += 4;
-        if (/aria|zira|samantha|ava|serena|allison|moira|neural/i.test(voice.name)) score += 5;
+        if (/neural|enhanced|premium|natural/i.test(voice.name)) score += 5;
+        if (/david|mark|george|daniel|james|lee|aaron|guy|male|man/i.test(voice.name)) score += 6;
+        if (/aria|zira|samantha|ava|serena|allison|moira/i.test(voice.name)) score += 2;
         if (/enhanced|premium|natural/i.test(voice.name)) score += 3;
+        if (/calm|soothing|soft/i.test(voice.name)) score += 3;
         if (!/compact|espeak|robot/i.test(voice.name)) score += 1;
         return { voice, score };
       })
@@ -1334,15 +1337,18 @@ function AppInner() {
           <div className="scene-aurora scene-aurora-a" />
           <div className="scene-aurora scene-aurora-b" />
           <div className="scene-grid" />
-          <div className="scene-rings">
-            <span />
-            <span />
-            <span />
+          <div className="mandala mandala-main">
+            <div className="mandala-core" />
+            <div className="mandala-ring mandala-ring-a" />
+            <div className="mandala-ring mandala-ring-b" />
+            <div className="mandala-ring mandala-ring-c" />
+            <div className="mandala-petals mandala-petals-a" />
+            <div className="mandala-petals mandala-petals-b" />
           </div>
-          <div className="scene-monolith scene-monolith-a" />
-          <div className="scene-monolith scene-monolith-b" />
-          <div className="scene-orbital scene-orbital-a" />
-          <div className="scene-orbital scene-orbital-b" />
+          <div className="mandala mandala-ghost">
+            <div className="mandala-ring mandala-ring-b" />
+            <div className="mandala-petals mandala-petals-c" />
+          </div>
         </div>
 
         <aside className="side-rail">

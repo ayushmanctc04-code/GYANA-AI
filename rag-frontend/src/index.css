@@ -82,10 +82,11 @@ textarea {
 }
 
 .scene-aurora,
-.scene-orbital,
-.scene-monolith,
-.scene-rings,
-.scene-grid {
+.scene-grid,
+.mandala,
+.mandala-ring,
+.mandala-petals,
+.mandala-core {
   position: absolute;
 }
 
@@ -129,75 +130,103 @@ textarea {
   mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.95), transparent);
 }
 
-.scene-rings {
-  top: 18%;
-  left: 58%;
-  width: 24rem;
-  height: 24rem;
-  transform: translateX(-50%);
+.mandala {
+  border-radius: 50%;
+  pointer-events: none;
 }
 
-.scene-rings span {
-  position: absolute;
+.mandala-main {
+  top: 14%;
+  left: 56%;
+  width: 28rem;
+  height: 28rem;
+  transform: translateX(-50%);
+  opacity: 0.55;
+}
+
+.mandala-ghost {
+  right: 6%;
+  bottom: 8%;
+  width: 16rem;
+  height: 16rem;
+  opacity: 0.2;
+}
+
+.mandala-core,
+.mandala-ring,
+.mandala-petals {
   inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(112, 245, 236, 0.14);
-  box-shadow: inset 0 0 40px rgba(76, 233, 222, 0.04);
-  animation: rotateRing 22s linear infinite;
 }
 
-.scene-rings span:nth-child(2) {
-  inset: 2.2rem;
-  animation-direction: reverse;
-  animation-duration: 16s;
+.mandala-core {
+  inset: 40%;
+  background: radial-gradient(circle, rgba(91, 244, 234, 0.22), rgba(91, 244, 234, 0.03) 70%);
+  box-shadow: 0 0 35px rgba(91, 244, 234, 0.18);
 }
 
-.scene-rings span:nth-child(3) {
-  inset: 4.6rem;
-  animation-duration: 12s;
+.mandala-ring {
+  border: 1px solid rgba(112, 245, 236, 0.12);
+  box-shadow: inset 0 0 28px rgba(76, 233, 222, 0.04);
 }
 
-.scene-monolith {
-  width: 7rem;
-  height: 17rem;
-  border-radius: 2rem;
-  background: linear-gradient(180deg, rgba(130, 246, 239, 0.14), rgba(130, 246, 239, 0.02));
-  border: 1px solid rgba(130, 246, 239, 0.16);
-  box-shadow: 0 0 40px rgba(24, 184, 175, 0.12);
-  transform: rotate(18deg);
+.mandala-ring-a {
+  animation: rotateRing 26s linear infinite;
 }
 
-.scene-monolith-a {
-  top: 14%;
-  left: 48%;
-  animation: monolithFloat 20s ease-in-out infinite;
+.mandala-ring-b {
+  inset: 10%;
+  border-style: dashed;
+  animation: rotateRing 18s linear infinite reverse;
 }
 
-.scene-monolith-b {
-  right: 6%;
-  bottom: 16%;
-  transform: rotate(-16deg);
-  animation: monolithFloat 24s ease-in-out infinite reverse;
+.mandala-ring-c {
+  inset: 22%;
+  animation: rotateRing 12s linear infinite;
 }
 
-.scene-orbital {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(195, 255, 252, 0.9), rgba(24, 184, 175, 0.16) 72%);
-  box-shadow: 0 0 28px rgba(120, 252, 244, 0.55);
+.mandala-petals {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  opacity: 0.65;
 }
 
-.scene-orbital-a {
-  top: 24%;
-  left: 62%;
-  animation: orbitalDrift 14s ease-in-out infinite;
+.mandala-petals-a {
+  background-image:
+    radial-gradient(circle at 50% 7%, rgba(99, 244, 235, 0.18) 0, rgba(99, 244, 235, 0.18) 6%, transparent 7%),
+    radial-gradient(circle at 77% 23%, rgba(99, 244, 235, 0.14) 0, rgba(99, 244, 235, 0.14) 6%, transparent 7%),
+    radial-gradient(circle at 93% 50%, rgba(99, 244, 235, 0.16) 0, rgba(99, 244, 235, 0.16) 6%, transparent 7%),
+    radial-gradient(circle at 77% 77%, rgba(99, 244, 235, 0.14) 0, rgba(99, 244, 235, 0.14) 6%, transparent 7%),
+    radial-gradient(circle at 50% 93%, rgba(99, 244, 235, 0.18) 0, rgba(99, 244, 235, 0.18) 6%, transparent 7%),
+    radial-gradient(circle at 23% 77%, rgba(99, 244, 235, 0.14) 0, rgba(99, 244, 235, 0.14) 6%, transparent 7%),
+    radial-gradient(circle at 7% 50%, rgba(99, 244, 235, 0.16) 0, rgba(99, 244, 235, 0.16) 6%, transparent 7%),
+    radial-gradient(circle at 23% 23%, rgba(99, 244, 235, 0.14) 0, rgba(99, 244, 235, 0.14) 6%, transparent 7%);
+  animation: rotateRing 28s linear infinite;
 }
 
-.scene-orbital-b {
-  bottom: 22%;
-  right: 16%;
-  animation: orbitalDrift 18s ease-in-out infinite reverse;
+.mandala-petals-b {
+  inset: 14%;
+  background-image:
+    radial-gradient(ellipse at 50% 4%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 83% 17%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 96% 50%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 83% 83%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 50% 96%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 17% 83%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 4% 50%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%),
+    radial-gradient(ellipse at 17% 17%, rgba(99, 244, 235, 0.08) 0, rgba(99, 244, 235, 0.08) 8%, transparent 9%);
+  animation: rotateRing 20s linear infinite reverse;
+}
+
+.mandala-petals-c {
+  inset: 8%;
+  background-image:
+    radial-gradient(circle at 50% 10%, rgba(99, 244, 235, 0.16) 0, rgba(99, 244, 235, 0.16) 5%, transparent 6%),
+    radial-gradient(circle at 90% 50%, rgba(99, 244, 235, 0.12) 0, rgba(99, 244, 235, 0.12) 5%, transparent 6%),
+    radial-gradient(circle at 50% 90%, rgba(99, 244, 235, 0.16) 0, rgba(99, 244, 235, 0.16) 5%, transparent 6%),
+    radial-gradient(circle at 10% 50%, rgba(99, 244, 235, 0.12) 0, rgba(99, 244, 235, 0.12) 5%, transparent 6%);
+  animation: rotateRing 24s linear infinite;
 }
 
 .side-rail {
