@@ -97,6 +97,132 @@ RESEARCH MODE:
 """,
 }
 
+LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "bn": "Bengali",
+    "or": "Odia",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "ml": "Malayalam",
+    "kn": "Kannada",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "as": "Assamese",
+    "ne": "Nepali",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+}
+
+LANGUAGE_ALIASES = {
+    "auto": "auto",
+    "english": "en",
+    "hindi": "hi",
+    "bengali": "bn",
+    "bangla": "bn",
+    "odia": "or",
+    "oriya": "or",
+    "tamil": "ta",
+    "telugu": "te",
+    "malayalam": "ml",
+    "kannada": "kn",
+    "marathi": "mr",
+    "gujarati": "gu",
+    "punjabi": "pa",
+    "urdu": "ur",
+    "assamese": "as",
+    "nepali": "ne",
+    "spanish": "es",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "portuguese": "pt",
+    "russian": "ru",
+    "arabic": "ar",
+    "chinese": "zh",
+    "mandarin": "zh",
+    "japanese": "ja",
+    "korean": "ko",
+}
+
+def normalize_language_code(language):
+    if not language:
+        return "auto"
+    value = str(language).strip().replace("_", "-").lower()
+    if value in LANGUAGE_ALIASES:
+        return LANGUAGE_ALIASES[value]
+    if "-" in value:
+        value = value.split("-", 1)[0]
+    if len(value) == 2:
+        return value
+    return "auto"
+
+def detect_language_code(text, fallback="en"):
+    sample = (text or "").strip()
+    if not sample:
+        return fallback
+
+    script_patterns = [
+        ("hi", r"[\u0900-\u097F]"),
+        ("bn", r"[\u0980-\u09FF]"),
+        ("or", r"[\u0B00-\u0B7F]"),
+        ("ta", r"[\u0B80-\u0BFF]"),
+        ("te", r"[\u0C00-\u0C7F]"),
+        ("kn", r"[\u0C80-\u0CFF]"),
+        ("ml", r"[\u0D00-\u0D7F]"),
+        ("gu", r"[\u0A80-\u0AFF]"),
+        ("pa", r"[\u0A00-\u0A7F]"),
+        ("ur", r"[\u0600-\u06FF]"),
+        ("ru", r"[\u0400-\u04FF]"),
+        ("zh", r"[\u4E00-\u9FFF]"),
+        ("ja", r"[\u3040-\u30FF]"),
+        ("ko", r"[\uAC00-\uD7AF]"),
+    ]
+    for code, pattern in script_patterns:
+        if re.search(pattern, sample):
+            return code
+
+    try:
+        from langdetect import detect
+
+        detected = normalize_language_code(detect(sample[:1200]))
+        return detected if detected != "auto" else fallback
+    except Exception:
+        return fallback
+
+def resolve_response_language(question, preferred_language="auto", context_docs=""):
+    normalized = normalize_language_code(preferred_language)
+    if normalized != "auto":
+        return normalized
+
+    for candidate in (question, context_docs[:1500] if context_docs else ""):
+        detected = detect_language_code(candidate, fallback="auto")
+        if detected != "auto":
+            return detected
+    return "en"
+
+def build_language_instruction(question, preferred_language="auto", context_docs=""):
+    language_code = resolve_response_language(question, preferred_language, context_docs)
+    language_name = LANGUAGE_NAMES.get(language_code, language_code.upper())
+    instruction = f"""
+LANGUAGE MODE:
+- Answer in {language_name}.
+- If the user writes in another language or explicitly asks for another language, switch to that language.
+- Keep code, commands, file names, URLs, and technical identifiers in their original form when needed.
+- For multilingual questions, follow the main language of the latest user message.
+"""
+    return instruction.strip(), language_code
+
 async def search_web(query):
     print(f"[SEARCH] Query: {query}")
 
@@ -276,9 +402,13 @@ def build_search_context(sr, query):
         ctx += "Answer using results. Cite [1][2] etc. No tool JSON."
     return ctx, sources
 
-async def stream_agentic(question, user_id, context_docs=""):
+async def stream_agentic(question, user_id, context_docs="", preferred_language="auto"):
     history = get_history(user_id)
     system, task_profile = build_dynamic_system(question, context_docs)
+    language_instruction, response_language = build_language_instruction(
+        question, preferred_language, context_docs
+    )
+    system = system + "\n\n" + language_instruction
     sources = []
 
     if context_docs:
@@ -343,6 +473,7 @@ async def stream_agentic(question, user_id, context_docs=""):
     hold_buf = ""; HOLD_LEN = 15
 
     try:
+        yield "data: [LANGUAGE]" + response_language + "\n\n"
         stream = groq_client.chat.completions.create(
             model=MODEL, messages=messages, temperature=0.7, max_tokens=3000, stream=True)
 
@@ -361,7 +492,7 @@ async def stream_agentic(question, user_id, context_docs=""):
                         sr2 = await search_web(tc.get("query",question))
                         ctx2,src2 = build_search_context(sr2,tc.get("query",question))
                         sources.extend(src2)
-                        m2 = [{"role":"system","content":SYSTEM+"\n\n"+ctx2+"\n\nAnswer directly."}]
+                        m2 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\n"+ctx2+"\n\nAnswer directly."}]
                         m2.extend(history[-6:]); m2.append({"role":"user","content":question})
                         s2 = groq_client.chat.completions.create(model=MODEL,messages=m2,temperature=0.6,max_tokens=2000,stream=True)
                         for c2 in s2:
@@ -371,7 +502,7 @@ async def stream_agentic(question, user_id, context_docs=""):
                         yield "data: [STATUS]Reading page...\n\n"
                         ur = await read_url(tc.get("url",""))
                         if ur.get("content"):
-                            m3 = [{"role":"system","content":SYSTEM+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer directly."}]
+                            m3 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer directly."}]
                             m3.extend(history[-6:]); m3.append({"role":"user","content":question})
                             s3 = groq_client.chat.completions.create(model=MODEL,messages=m3,temperature=0.6,max_tokens=2000,stream=True)
                             for c3 in s3:
@@ -419,9 +550,13 @@ async def stream_agentic(question, user_id, context_docs=""):
     add_history(user_id, "assistant", clean[:1500] or full[:1500])
     yield "data: [DONE]\n\n"
 
-async def ask_agentic(question, user_id, context_docs=""):
+async def ask_agentic(question, user_id, context_docs="", preferred_language="auto"):
     history = get_history(user_id)
     system, _task_profile = build_dynamic_system(question, context_docs)
+    language_instruction, response_language = build_language_instruction(
+        question, preferred_language, context_docs
+    )
+    system = system + "\n\n" + language_instruction
     if context_docs: system = system + "\n\nDOCUMENT:\n" + context_docs
     messages = [{"role":"system","content":system}]
     messages.extend(history[-10:])
@@ -430,15 +565,14 @@ async def ask_agentic(question, user_id, context_docs=""):
     answer = r.choices[0].message.content.strip()
     add_history(user_id,"user",question)
     add_history(user_id,"assistant",answer)
-    return {"answer":answer,"sources":[]}
+    return {"answer":answer,"sources":[],"language":response_language}
 
-async def stream_general(question, user_id):
-    async for chunk in stream_agentic(question, user_id):
+async def stream_general(question, user_id, preferred_language="auto"):
+    async for chunk in stream_agentic(question, user_id, preferred_language=preferred_language):
         yield chunk
 
-async def ask_general(question, user_id):
-    result = await ask_agentic(question, user_id)
-    return result["answer"]
+async def ask_general(question, user_id, preferred_language="auto"):
+    return await ask_agentic(question, user_id, preferred_language=preferred_language)
 
 # ── Real RAG ──────────────────────────────────────────────────────────────────
 try:

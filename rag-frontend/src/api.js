@@ -91,12 +91,13 @@ export async function transcribeOnly(blob, userId) {
   return data;
 }
 
-export async function askOnce({ question, userId, mode = "auto" }) {
+export async function askOnce({ question, userId, mode = "auto", language = "auto" }) {
   try {
     const { data } = await axios.post(`${API_BASE}/ask`, {
       question,
       user_id: userId,
       mode,
+      language,
     });
     return data;
   } catch (error) {
@@ -108,6 +109,7 @@ export async function streamAssistant({
   question,
   userId,
   mode = "auto",
+  language = "auto",
   onEvent,
 }) {
   const response = await fetch(`${API_BASE}/ask/stream`, {
@@ -120,6 +122,7 @@ export async function streamAssistant({
       question,
       user_id: userId,
       mode,
+      language,
     }),
   });
 
@@ -158,6 +161,10 @@ export async function streamAssistant({
       } catch {
         onEvent?.({ type: "sources", value: [] });
       }
+      return;
+    }
+    if (payload.startsWith("[LANGUAGE]")) {
+      onEvent?.({ type: "language", value: payload.slice(10).trim() || "auto" });
       return;
     }
     if (payload.startsWith("[IMAGE]")) {

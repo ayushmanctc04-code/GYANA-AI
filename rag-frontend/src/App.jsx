@@ -21,9 +21,10 @@ import {
 } from "./api";
 
 const CHAT_STORAGE_KEY = "gyana.workspace.sessions";
+const LANGUAGE_STORAGE_KEY = "gyana.workspace.language";
 const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 const GURU_PROMPT_PREFIX =
-  "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. No markdown unless code is essential.";
+  "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
 
 const MODE_META = {
   auto: "Auto",
@@ -36,6 +37,26 @@ const SUGGESTIONS = [
   "Help me think through what I should do next.",
   "Turn my notes into a revision plan.",
   "Talk to me like a calm mentor.",
+];
+
+const LANGUAGE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "bn", label: "Bengali" },
+  { value: "or", label: "Odia" },
+  { value: "ta", label: "Tamil" },
+  { value: "te", label: "Telugu" },
+  { value: "mr", label: "Marathi" },
+  { value: "gu", label: "Gujarati" },
+  { value: "pa", label: "Punjabi" },
+  { value: "ur", label: "Urdu" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "ar", label: "Arabic" },
+  { value: "zh", label: "Chinese" },
+  { value: "ja", label: "Japanese" },
 ];
 
 const firebaseConfig = {
@@ -74,6 +95,52 @@ function loadSessions() {
 
 function saveSessions(sessions) {
   localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
+}
+
+function loadPreferredLanguage() {
+  try {
+    const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return saved || "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function normalizeLanguageTag(language) {
+  if (!language) return "en-US";
+  const value = String(language).replace("_", "-").trim();
+  if (!value || value === "auto") {
+    if (typeof navigator !== "undefined") {
+      return navigator.languages?.[0] || navigator.language || "en-US";
+    }
+    return "en-US";
+  }
+
+  const lowered = value.toLowerCase();
+  const mapping = {
+    en: "en-US",
+    hi: "hi-IN",
+    bn: "bn-IN",
+    or: "or-IN",
+    ta: "ta-IN",
+    te: "te-IN",
+    mr: "mr-IN",
+    gu: "gu-IN",
+    pa: "pa-IN",
+    ur: "ur-IN",
+    es: "es-ES",
+    fr: "fr-FR",
+    de: "de-DE",
+    ar: "ar-SA",
+    zh: "zh-CN",
+    ja: "ja-JP",
+  };
+
+  return mapping[lowered] || value;
+}
+
+function getLanguageLabel(language) {
+  return LANGUAGE_OPTIONS.find((option) => option.value === language)?.label || "Auto";
 }
 
 function formatTime(dateLike) {
@@ -225,7 +292,7 @@ function LoginScreen() {
   );
 }
 
-function GuruMode({ isOpen, onClose, onSubmitVoice, busy }) {
+function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
   const [supported, setSupported] = useState(false);
   const [wakeText, setWakeText] = useState("Say hey guru or tap to speak");
   const [listeningWake, setListeningWake] = useState(false);
@@ -241,7 +308,7 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy }) {
 
     setSupported(true);
     const recognition = new Recognition();
-    recognition.lang = "en-US";
+    recognition.lang = normalizeLanguageTag(language);
     recognition.continuous = false;
     recognition.interimResults = true;
 
@@ -280,7 +347,7 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy }) {
         // ignore
       }
     };
-  }, [isOpen, onSubmitVoice]);
+  }, [isOpen, language, onSubmitVoice]);
 
   if (!isOpen) return null;
 
@@ -339,6 +406,7 @@ function AppInner() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [guruOpen, setGuruOpen] = useState(false);
+  const [preferredLanguage, setPreferredLanguage] = useState(() => loadPreferredLanguage());
   const [speechEnabled, setSpeechEnabled] = useState(true);
   const [voiceSupport, setVoiceSupport] = useState({
     input: false,
@@ -363,6 +431,10 @@ function AppInner() {
   useEffect(() => {
     saveSessions(sessions);
   }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, preferredLanguage);
+  }, [preferredLanguage]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -446,17 +518,24 @@ function AppInner() {
     setToast({ message, type });
   }
 
-  function pickBestVoice() {
+  function pickBestVoice(languageHint = preferredLanguage) {
     const voices = voicesRef.current || [];
     if (!voices.length) return null;
 
-    const preferred = voices.find((voice) =>
+    const normalized = normalizeLanguageTag(languageHint).toLowerCase();
+    const baseLanguage = normalized.split("-")[0];
+    const matchingVoices = voices.filter((voice) =>
+      voice.lang?.toLowerCase().startsWith(baseLanguage)
+    );
+    const pool = matchingVoices.length ? matchingVoices : voices;
+
+    const preferred = pool.find((voice) =>
       /google|samantha|serena|ava|allison|female|zira|aria/i.test(voice.name)
     );
-    return preferred || voices.find((voice) => /en/i.test(voice.lang)) || voices[0];
+    return preferred || pool[0] || voices[0];
   }
 
-  function speakText(text, messageId = "guru") {
+  function speakText(text, messageId = "guru", languageHint = preferredLanguage) {
     if (!speechEnabled || !voiceSupport.output || !text?.trim()) return;
 
     try {
@@ -464,8 +543,10 @@ function AppInner() {
       if (!synth || typeof SpeechSynthesisUtterance === "undefined") return;
       synth.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      const voice = pickBestVoice();
+      const normalizedLanguage = normalizeLanguageTag(languageHint);
+      const voice = pickBestVoice(normalizedLanguage);
       if (voice) utterance.voice = voice;
+      utterance.lang = normalizedLanguage;
       utterance.rate = 1.02;
       utterance.pitch = 1.02;
       utterance.onstart = () => setSpeakingId(messageId);
@@ -573,7 +654,30 @@ function AppInner() {
       images: [],
       files: [],
       codeResults: [],
+      language: preferredLanguage,
     };
+  }
+
+  async function handleClearDocuments() {
+    if (!user?.uid) return;
+    try {
+      await clearDocuments(user.uid);
+      setUploads([]);
+      setDocumentStats({ total_chunks: 0, total_documents: 0, documents: [] });
+      notify("Document knowledge cleared.", "success");
+    } catch (error) {
+      notify(toErrorMessage(error, "Could not clear documents."), "error");
+    }
+  }
+
+  async function handleClearMemory() {
+    if (!user?.uid) return;
+    try {
+      await clearMemory(user.uid);
+      notify("Conversation memory cleared.", "success");
+    } catch (error) {
+      notify(toErrorMessage(error, "Could not clear memory."), "error");
+    }
   }
 
   function handleNewConversation() {
@@ -651,15 +755,22 @@ function AppInner() {
     setStatus("Thinking");
     setDraft("");
     let collectedText = "";
+    let responseLanguage = preferredLanguage;
 
     try {
       await streamAssistant({
         question,
         userId: user.uid,
         mode: chosenMode,
+        language: preferredLanguage,
         onEvent: (event) => {
           if (event.type === "status") {
             setStatus(event.value);
+            return;
+          }
+          if (event.type === "language") {
+            responseLanguage = event.value || preferredLanguage;
+            patchMessage(assistant.id, { language: responseLanguage });
             return;
           }
           if (event.type === "text") {
@@ -696,7 +807,7 @@ function AppInner() {
             patchMessage(assistant.id, { streaming: false });
             setStatus("Ready");
             if (collectedText.trim()) {
-              setTimeout(() => speakText(collectedText, assistant.id), 120);
+              setTimeout(() => speakText(collectedText, assistant.id, responseLanguage), 120);
             }
           }
         },
@@ -708,14 +819,16 @@ function AppInner() {
           question,
           userId: user.uid,
           mode: chosenMode,
+          language: preferredLanguage,
         });
         patchMessage(assistant.id, {
           text: data.answer || fallbackMessage,
           sources: data.sources || [],
           streaming: false,
+          language: data.language || responseLanguage,
         });
         if (data.answer) {
-          setTimeout(() => speakText(data.answer, assistant.id), 120);
+          setTimeout(() => speakText(data.answer, assistant.id, data.language || responseLanguage), 120);
         }
       } catch {
         patchMessage(assistant.id, {
@@ -873,6 +986,7 @@ function AppInner() {
         onClose={() => setGuruOpen(false)}
         onSubmitVoice={handleGuruVoice}
         busy={busy || isRecording}
+        language={preferredLanguage}
       />
 
       <div className="app-shell">
@@ -966,6 +1080,19 @@ function AppInner() {
               </p>
             </div>
             <div className="header-actions">
+              <label className="language-picker">
+                <span>Language</span>
+                <select
+                  value={preferredLanguage}
+                  onChange={(event) => setPreferredLanguage(event.target.value)}
+                >
+                  {LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 className={`text-button ${speechEnabled ? "active-voice" : ""}`}
                 onClick={() => {
@@ -1012,7 +1139,11 @@ function AppInner() {
                   >
                     <div className="message-label">
                       <span>{message.role === "user" ? "You" : "Gyana"}</span>
-                      <span>{formatTime(message.createdAt)}</span>
+                      <span>
+                        {message.role === "assistant" && message.language
+                          ? `${getLanguageLabel(message.language)} • ${formatTime(message.createdAt)}`
+                          : formatTime(message.createdAt)}
+                      </span>
                     </div>
                     <div className={`message-content ${message.error ? "error" : ""}`}>
                       {message.text ? (
@@ -1041,7 +1172,7 @@ function AppInner() {
                           onClick={() =>
                             speakingId === message.id
                               ? stopSpeaking()
-                              : speakText(message.text, message.id)
+                              : speakText(message.text, message.id, message.language || preferredLanguage)
                           }
                         >
                           {speakingId === message.id ? "Stop voice" : "Listen"}
@@ -1084,6 +1215,7 @@ function AppInner() {
                       ? "Voice ready"
                       : "Tap voice ready"
                     : "Voice limited"}
+                  {` • ${getLanguageLabel(preferredLanguage)}`}
                 </span>
                 <button className="text-button" onClick={() => fileInputRef.current?.click()}>
                   Attach

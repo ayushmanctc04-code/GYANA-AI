@@ -18,6 +18,7 @@ from app.services.rag_service import (
     ask_agentic,
     ask_general,
     clear_history,
+    detect_language_code,
     delete_documents,
     ingest_document,
     query_documents,
@@ -48,6 +49,7 @@ class AskRequest(BaseModel):
     user_id: str = "default"
     context: Optional[str] = None
     mode: Literal["auto", "general", "docs"] = "auto"
+    language: str = "auto"
 
 
 class ClearRequest(BaseModel):
@@ -131,11 +133,11 @@ async def ask_stream(req: AskRequest):
 
     async def generate():
         if req.mode == "general":
-            async for chunk in stream_general(req.question, req.user_id):
+            async for chunk in stream_general(req.question, req.user_id, req.language):
                 yield chunk
             return
 
-        async for chunk in stream_agentic(req.question, req.user_id, context_docs):
+        async for chunk in stream_agentic(req.question, req.user_id, context_docs, req.language):
             yield chunk
 
     return _stream_response(generate())
@@ -144,7 +146,7 @@ async def ask_stream(req: AskRequest):
 @app.post("/ask-general/stream")
 async def ask_general_stream(req: AskRequest):
     async def generate():
-        async for chunk in stream_general(req.question, req.user_id):
+        async for chunk in stream_general(req.question, req.user_id, req.language):
             yield chunk
 
     return _stream_response(generate())
@@ -154,15 +156,13 @@ async def ask_general_stream(req: AskRequest):
 async def ask(req: AskRequest):
     context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
     if req.mode == "general":
-        answer = await ask_general(req.question, req.user_id)
-        return {"answer": answer, "sources": []}
-    return await ask_agentic(req.question, req.user_id, context_docs)
+        return await ask_general(req.question, req.user_id, req.language)
+    return await ask_agentic(req.question, req.user_id, context_docs, req.language)
 
 
 @app.post("/ask-general")
 async def ask_general_ep(req: AskRequest):
-    answer = await ask_general(req.question, req.user_id)
-    return {"answer": answer, "sources": []}
+    return await ask_general(req.question, req.user_id, req.language)
 
 
 @app.post("/upload")
@@ -216,7 +216,11 @@ async def transcribe(file: UploadFile = File(...)):
                 response_format="text",
             )
         text = transcription if isinstance(transcription, str) else transcription.text
-        return {"text": text, "transcription": text}
+        return {
+            "text": text,
+            "transcription": text,
+            "language": detect_language_code(text, fallback="en"),
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
@@ -253,9 +257,12 @@ async def speech_query(file: UploadFile = File(...), request: Request = None):
             pass
 
     context_docs = await _resolve_document_context(question, user_id, "auto")
-    result = await ask_agentic(question, user_id, context_docs)
+    detected_language = detect_language_code(question, fallback="en")
+    result = await ask_agentic(question, user_id, context_docs, detected_language)
     return {
         "transcribed_question": question,
+        "detected_language": detected_language,
         "answer": result["answer"],
         "sources": result.get("sources", []),
+        "answer_language": result.get("language", detected_language),
     }
