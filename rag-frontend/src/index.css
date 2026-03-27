@@ -506,19 +506,24 @@ textarea {
 }
 
 .chat-header {
-  padding: 16px 18px;
-  border-radius: 22px;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  background:
-    linear-gradient(180deg, rgba(18, 26, 31, 0.86), rgba(15, 21, 26, 0.72)),
-    radial-gradient(circle at top right, rgba(72, 227, 216, 0.12), transparent 28%);
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .header-topline {
   margin-bottom: 10px;
+}
+
+.chat-header > div:first-child {
+  display: none;
 }
 
 .sidebar-toggle {
@@ -558,9 +563,10 @@ textarea {
 
 .header-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-left: auto;
 }
 
 .language-picker {
@@ -644,25 +650,26 @@ textarea {
 
 .session-summary {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .session-summary span {
-  padding: 6px 10px;
+  padding: 5px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .session-summary.compact {
-  margin-top: -4px;
+  margin-top: 2px;
 }
 
 .workspace-panel {
