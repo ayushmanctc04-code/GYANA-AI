@@ -555,6 +555,7 @@ function AppInner() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [guruOpen, setGuruOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [preferredLanguage, setPreferredLanguage] = useState(() => loadPreferredLanguage());
   const [focusPreset, setFocusPreset] = useState(() =>
     loadStoredValue(FOCUS_STORAGE_KEY, "adaptive")
@@ -1332,7 +1333,7 @@ function AppInner() {
         language={preferredLanguage}
       />
 
-      <div className="app-shell">
+      <div className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
         <div className="scene-backdrop" aria-hidden="true">
           <div className="scene-aurora scene-aurora-a" />
           <div className="scene-aurora scene-aurora-b" />
@@ -1351,7 +1352,7 @@ function AppInner() {
           </div>
         </div>
 
-        <aside className="side-rail">
+        <aside className={`side-rail ${sidebarOpen ? "open" : "collapsed"}`}>
           <button className="brand-button" onClick={handleNewConversation}>
             <span className="brand-mark" />
             <div>
@@ -1458,6 +1459,15 @@ function AppInner() {
         <main className="chat-stage">
           <header className="chat-header">
             <div>
+              <div className="header-topline">
+                <button
+                  className="sidebar-toggle"
+                  onClick={() => setSidebarOpen((value) => !value)}
+                  aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                >
+                  {sidebarOpen ? "Panel" : "Menu"}
+                </button>
+              </div>
               <div className="chat-title">Gyana</div>
               <p>
                 Tutor when you need clarity. Guide when you feel lost. Companion when
