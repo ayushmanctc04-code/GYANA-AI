@@ -32,34 +32,34 @@ const QUICK_ACTIONS = [
 
 const FEATURE_TILES = [
   {
-    title: "Deep Research",
-    body: "General chat, current web queries, and structured answers in one flow.",
+    title: "Battle-Tested Research",
+    body: "Ask fast, broad questions or run deeper hunts across live context and long-form reasoning.",
   },
   {
-    title: "Document Brain",
-    body: "Upload notes, decks, PDFs, and text files to build a searchable knowledge base.",
+    title: "Survival Archive",
+    body: "Turn notes, PDFs, decks, and raw files into a searchable memory vault for exams and projects.",
   },
   {
-    title: "Voice Input",
-    body: "Record a question and let the workspace transcribe and answer it instantly.",
+    title: "Voice Command",
+    body: "Speak naturally and get instant transcription plus an answer without breaking flow.",
   },
 ];
 
 const MODE_META = {
   auto: {
     label: "Auto",
-    tagline: "Best of both worlds",
-    description: "Uses your documents when helpful, then falls back to the broader agent.",
+    tagline: "Adaptive intelligence",
+    description: "Uses your knowledge vault when needed, then reaches outward for broader reasoning.",
   },
   docs: {
     label: "Docs",
-    tagline: "RAG-first",
-    description: "Prioritizes your uploaded knowledge base for grounded answers.",
+    tagline: "Archive mode",
+    description: "Prioritizes your uploaded material for grounded study, revision, and project support.",
   },
   general: {
     label: "General",
-    tagline: "Open-world assistant",
-    description: "Focuses on direct chat, tools, search, and generation without document context.",
+    tagline: "Open world mode",
+    description: "Focuses on direct chat, tools, search, and creation without relying on your documents.",
   },
 };
 
@@ -192,10 +192,10 @@ function LoginScreen() {
     <main className="auth-shell">
       <div className="auth-panel">
         <div className="badge">Gyana AI Workspace</div>
-        <h1>One AI for docs, chat, code, search, and voice.</h1>
+        <h1>The student command center for the next age.</h1>
         <p>
-          Sign in to save your workspace and keep your document intelligence attached
-          to your account.
+          Sign in to unlock your archive, your chats, and your personal AI workspace
+          across documents, voice, and live problem-solving.
         </p>
         <button className="primary-btn" onClick={handleSignIn} disabled={busy}>
           {busy ? "Opening Google..." : "Continue with Google"}
@@ -641,18 +641,37 @@ export default function App() {
 
   return (
     <div className="workspace-shell">
+      <div className="scene-backdrop" aria-hidden="true">
+        <div className="scene-orb orb-a" />
+        <div className="scene-orb orb-b" />
+        <div className="scene-orb orb-c" />
+        <div className="scene-structure structure-left">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="scene-structure structure-right">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="scene-grid" />
+      </div>
+
       <aside className="sidebar">
         <div className="brand-block">
+          <div className="brand-aura" />
           <div className="brand-kicker">Gyana AI</div>
-          <h1>All-in-one intelligence workspace</h1>
+          <h1>Future wisdom for a broken world.</h1>
           <p>
-            A single place for research, retrieval, code-aware answers, voice
-            queries, and project context.
+            Built for students who need a calm, powerful desk for notes, exams,
+            coding, research, and survival-grade focus.
           </p>
+          <div className="brand-mantra">Sacred tech • archive mind • field intelligence</div>
         </div>
 
         <button className="primary-btn full-width" onClick={handleNewWorkspace}>
-          New workspace
+          New command room
         </button>
 
         <section className="panel">
@@ -677,8 +696,8 @@ export default function App() {
         <section className="panel">
           <div className="panel-label">Knowledge Base</div>
           <button className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
-            <span>Upload documents, images, or audio</span>
-            <small>{documentStats.total_documents} docs indexed</small>
+            <span>Feed the archive with notes, images, or recordings</span>
+            <small>{documentStats.total_documents} sources indexed</small>
           </button>
           <input
             ref={fileInputRef}
@@ -700,7 +719,7 @@ export default function App() {
           </div>
           <div className="upload-list">
             {uploads.length === 0 ? (
-              <div className="muted-box">No uploads yet. Start with a PDF, deck, or notes.</div>
+              <div className="muted-box">No archive yet. Start with a PDF, class deck, notebook export, or voice clip.</div>
             ) : (
               uploads.map((upload) => (
                 <div key={upload.id} className={`upload-row ${upload.status}`}>
@@ -722,7 +741,7 @@ export default function App() {
           </div>
           <div className="panel-actions">
             <button className="ghost-btn" onClick={handleClearDocuments}>
-              Clear docs
+              Clear archive
             </button>
             <button className="ghost-btn" onClick={handleClearMemory}>
               Clear memory
@@ -741,7 +760,7 @@ export default function App() {
                 <button className="session-main" onClick={() => handleSelectSession(session.id)}>
                   <strong>{session.title}</strong>
                   <span>
-                    {formatDate(session.updatedAt)} • {session.messages.length} messages
+                    {formatDate(session.updatedAt)} • {session.messages.length} signals
                   </span>
                 </button>
                 <button className="session-delete" onClick={() => handleDeleteSession(session.id)}>
@@ -756,7 +775,7 @@ export default function App() {
       <main className="main-stage">
         <header className="topbar">
           <div>
-            <div className="eyebrow">Powered AI Workspace</div>
+            <div className="eyebrow">Post-Apocalyptic Scholar Interface</div>
             <h2>{capabilities?.product_name || "Gyana AI Workspace"}</h2>
           </div>
           <div className="topbar-right">
@@ -778,19 +797,24 @@ export default function App() {
         </header>
 
         <section className="hero-grid">
-          <div className="hero-card">
-            <div className="hero-kicker">Status</div>
-            <h3>Build, ask, upload, and explore from one interface.</h3>
+          <div className="hero-card hero-card-main">
+            <div className="hero-kicker">Field Status</div>
+            <h3>Study like the network fell and your mind became the last infrastructure.</h3>
             <p>
               {MODE_META[mode].description} Right now the workspace is tracking{" "}
-              {documentStats.total_documents} indexed documents and {messages.length} chat messages.
+              {documentStats.total_documents} indexed documents and {messages.length} active chat messages.
             </p>
+            <div className="hero-runes">
+              <span>Exam Ops</span>
+              <span>Project Forge</span>
+              <span>Knowledge Vault</span>
+            </div>
             <div className="hero-status-row">
               <div className="signal-pill">
                 <span className="signal-dot" />
                 {status}
               </div>
-              <div className="signal-pill muted">{readyUploads.length} ready uploads</div>
+              <div className="signal-pill muted">{readyUploads.length} archive files ready</div>
             </div>
           </div>
 
@@ -818,16 +842,16 @@ export default function App() {
               <div className="empty-state">
                 <div className="empty-copy">
                   <div className="eyebrow">Start Here</div>
-                  <h3>Turn this into the most powerful AI desk in your project.</h3>
+                  <h3>Forge your own future-facing study bunker.</h3>
                   <p>
-                    Ask for research, upload your notes, brainstorm with the model, or
-                    record a voice query. The workspace will adapt to the mode you choose.
+                    Ask for research, upload your notes, break down concepts, or send a
+                    voice command. Gyana adapts itself to the mode you choose.
                   </p>
                 </div>
                 <div className="empty-points">
-                  <div className="muted-box">Use `Docs` mode for grounded Q&A over your files.</div>
-                  <div className="muted-box">Use `General` for broad help, search, code, and creation.</div>
-                  <div className="muted-box">Use `Auto` when you want the system to decide.</div>
+                  <div className="muted-box">Use `Docs` mode when your own notes, books, and slides should lead the answer.</div>
+                  <div className="muted-box">Use `General` mode for broad thinking, coding, search, and creation.</div>
+                  <div className="muted-box">Use `Auto` mode when you want Gyana to choose the strongest path.</div>
                 </div>
               </div>
             ) : (
