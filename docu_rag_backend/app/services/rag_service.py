@@ -366,10 +366,12 @@ async def ask_agentic(question, user_id, context_docs=""):
     return {"answer":answer,"sources":[]}
 
 async def stream_general(question, user_id):
-    async for chunk in stream_agentic(question, user_id): yield chunk
+    async for chunk in stream_agentic(question, user_id):
+        yield chunk
 
-def ask_general(question, user_id):
-    return asyncio.run(ask_agentic(question, user_id))["answer"]
+async def ask_general(question, user_id):
+    result = await ask_agentic(question, user_id)
+    return result["answer"]
 
 # ── Real RAG ──────────────────────────────────────────────────────────────────
 try:

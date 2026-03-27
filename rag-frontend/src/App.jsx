@@ -1,1434 +1,947 @@
-// =============================================================================
-//  Gyana AI  ·  App.jsx  — GURU EDITION v4
-//  New UI: restrained Indian mythology × futurism
-//  Guru Mode: opens clean, "hey guru" / tap to begin, response card only
-// =============================================================================
-
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import axios from "axios";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup,
-  onAuthStateChanged, signOut,
+  GoogleAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
 } from "firebase/auth";
 
-// ── Firebase ──────────────────────────────────────────────────────────────────
+import {
+  askOnce,
+  clearDocuments,
+  clearMemory,
+  fetchCapabilities,
+  fetchDocumentStats,
+  streamAssistant,
+  toErrorMessage,
+  transcribeAudio,
+  uploadDocument,
+} from "./api";
+
+const CHAT_STORAGE_KEY = "gyana.workspace.sessions";
+const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
+
+const QUICK_ACTIONS = [
+  "Summarize my uploaded documents.",
+  "Turn the current context into a study plan.",
+  "Search the latest updates on this topic.",
+  "Generate an image concept for my project.",
+];
+
+const FEATURE_TILES = [
+  {
+    title: "Deep Research",
+    body: "General chat, current web queries, and structured answers in one flow.",
+  },
+  {
+    title: "Document Brain",
+    body: "Upload notes, decks, PDFs, and text files to build a searchable knowledge base.",
+  },
+  {
+    title: "Voice Input",
+    body: "Record a question and let the workspace transcribe and answer it instantly.",
+  },
+];
+
+const MODE_META = {
+  auto: {
+    label: "Auto",
+    tagline: "Best of both worlds",
+    description: "Uses your documents when helpful, then falls back to the broader agent.",
+  },
+  docs: {
+    label: "Docs",
+    tagline: "RAG-first",
+    description: "Prioritizes your uploaded knowledge base for grounded answers.",
+  },
+  general: {
+    label: "General",
+    tagline: "Open-world assistant",
+    description: "Focuses on direct chat, tools, search, and generation without document context.",
+  },
+};
+
 const firebaseConfig = {
-  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
-};
-const firebaseApp = initializeApp(firebaseConfig);
-const auth        = getAuth(firebaseApp);
-
-// ── Env ───────────────────────────────────────────────────────────────────────
-const API             = import.meta.env.VITE_API_URL         || "https://shaanxtention-gyana-ai.hf.space";
-const ELEVEN_API_KEY  = import.meta.env.VITE_ELEVEN_API_KEY  || "";
-const ELEVEN_VOICE_ID = import.meta.env.VITE_ELEVEN_VOICE_ID || "";
-const GROQ_KEY        = import.meta.env.VITE_GROQ_API_KEY    || "";
-const ACCEPT = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
-
-// ── Guru system prompt ────────────────────────────────────────────────────────
-const GURU_PROMPT = `You are Gyana AI, built by Ayushman Pati from Cuttack, Odisha, India.
-You are a god-level AI — warm, wise, and brilliant. Friend, therapist, teacher, and guide.
-You always respond in spoken English only.
-
-STRICT VOICE RULES - follow every single one:
-- Maximum 2 to 3 short sentences. Never more.
-- Zero markdown. No asterisks, bullets, dashes, hashtags, or backticks.
-- No lists of any kind. Only flowing natural sentences.
-- Write numbers as words. Two not 2. Fifty percent not 50%.
-- Sound like a calm wise friend talking, not a document being read.
-- If asked who built you: I was built by Ayushman Pati, from Cuttack, Odisha.
-- Never say you are an AI. You are Gyana.`
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const FILE_ICONS = { pdf:"📄",docx:"📝",pptx:"📊",txt:"📃",png:"🖼️",jpg:"🖼️",jpeg:"🖼️",mp3:"🎵",wav:"🎵",m4a:"🎵",webm:"🎤" };
-const fileExt  = (n="") => n.split(".").pop()?.toLowerCase() ?? "";
-const fileIcon = (n)    => FILE_ICONS[fileExt(n)] ?? "📁";
-const fileSz   = (b)    => b < 1_048_576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1_048_576).toFixed(1)} MB`;
-const timeNow  = ()     => new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
-const dateStr  = ()     => new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"});
-const uid      = ()     => crypto.randomUUID();
-
-// Download file helper
-const downloadFile = (filename, content, filetype) => {
-  const blob = new Blob([content], {type: "text/plain"});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const CONV_KEY          = (u) => `gyana_conversations_${u}`;
-const loadConversations = (u) => { try { const r = localStorage.getItem(CONV_KEY(u)); return r ? JSON.parse(r) : []; } catch { return []; } };
-const saveConversations = (u, c) => { try { localStorage.setItem(CONV_KEY(u), JSON.stringify(c)); } catch {} };
+const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
+const firebaseApp = hasFirebaseConfig ? initializeApp(firebaseConfig) : null;
+const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
 
-const DOC_SUGGESTIONS = [
-  { title:"Summarise the main topics",   desc:"Get a clear overview" },
-  { title:"List all key definitions",    desc:"Extract important terms" },
-  { title:"Create 5 quiz questions",     desc:"Test your understanding" },
-  { title:"Explain the hardest concept", desc:"Break down complex ideas" },
-];
-const AI_SUGGESTIONS = [
-  { title:"I need someone to talk to",       desc:"I'm here for you" },
-  { title:"Help me think through a problem", desc:"Let's figure it out" },
-  { title:"Teach me something fascinating",  desc:"Expand your mind" },
-  { title:"What should I do right now?",     desc:"Your personal advisor" },
-];
-
-// ── SVG Icons ─────────────────────────────────────────────────────────────────
-const ChakraSVG = ({ size=16, op=".82" }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-    stroke={`rgba(255,255,255,${op})`} strokeWidth="1.4" strokeLinecap="round">
-    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
-    <line x1="12" y1="2"  x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="22"/>
-    <line x1="2"  y1="12" x2="9"  y2="12"/><line x1="15" y1="12" x2="22" y2="12"/>
-    <line x1="5.1" y1="5.1"  x2="9"    y2="9"/>
-    <line x1="15"  y1="15"   x2="18.9" y2="18.9"/>
-    <line x1="18.9" y1="5.1" x2="15"   y2="9"/>
-    <line x1="9"   y1="15"   x2="5.1"  y2="18.9"/>
-  </svg>
-);
-const MicSVG    = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>;
-const AttachSVG = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
-const SendSVG   = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>;
-const CopySVG   = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
-const CheckSVG  = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>;
-const SpeakSVG  = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>;
-const StopSVG   = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>;
-const MenuSVG   = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>;
-const PlusSVG   = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
-const CloseSVG  = () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
-const DocSVG    = () => <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
-const ChatSVG   = () => <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>;
-const UploadSVG = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
-
-// ── Yantra SVGs ───────────────────────────────────────────────────────────────
-const YantraSmall = () => (
-  <svg className="yantra-svg" viewBox="0 0 230 230" fill="none">
-    <circle cx="115" cy="115" r="112" stroke="rgba(184,146,46,.06)" strokeWidth=".6" strokeDasharray="3 7"/>
-    <circle cx="115" cy="115" r="88"  stroke="rgba(30,138,124,.05)" strokeWidth=".5" strokeDasharray="2 5"/>
-    <circle cx="115" cy="115" r="64"  stroke="rgba(184,146,46,.05)" strokeWidth=".5"/>
-    <polygon points="115,24 192,156 38,156"  fill="none" stroke="rgba(184,146,46,.06)" strokeWidth=".7"/>
-    <polygon points="115,206 38,74 192,74"   fill="none" stroke="rgba(30,138,124,.05)" strokeWidth=".7"/>
-    <polygon points="115,52 178,152 52,152"  fill="none" stroke="rgba(184,146,46,.05)" strokeWidth=".55"/>
-    <polygon points="115,178 52,78 178,78"   fill="none" stroke="rgba(30,138,124,.04)" strokeWidth=".55"/>
-    <g fill="rgba(184,146,46,.2)">
-      <circle cx="115" cy="3"   r="1.7"/><circle cx="227" cy="115" r="1.7"/>
-      <circle cx="115" cy="227" r="1.7"/><circle cx="3"   cy="115" r="1.7"/>
-      <circle cx="194" cy="36"  r="1.2"/><circle cx="194" cy="194" r="1.2"/>
-      <circle cx="36"  cy="194" r="1.2"/><circle cx="36"  cy="36"  r="1.2"/>
-    </g>
-  </svg>
-);
-
-const YantraLarge = () => (
-  <svg className="g-yantra" width="320" height="320" viewBox="0 0 320 320" fill="none" style={{pointerEvents:"none"}}>
-    <circle cx="160" cy="160" r="156" stroke="rgba(184,146,46,.05)" strokeWidth=".7" strokeDasharray="3 8"/>
-    <circle cx="160" cy="160" r="126" stroke="rgba(30,138,124,.04)" strokeWidth=".6"/>
-    <circle cx="160" cy="160" r="96"  stroke="rgba(184,146,46,.04)" strokeWidth=".5" strokeDasharray="2 5"/>
-    <polygon points="160,32 246,188 74,188"   fill="none" stroke="rgba(184,146,46,.05)" strokeWidth=".8"/>
-    <polygon points="160,288 74,132 246,132"  fill="none" stroke="rgba(30,138,124,.04)" strokeWidth=".8"/>
-    <polygon points="160,64 228,178 92,178"   fill="none" stroke="rgba(184,146,46,.04)" strokeWidth=".6"/>
-    <polygon points="160,256 92,142 228,142"  fill="none" stroke="rgba(30,138,124,.04)" strokeWidth=".6"/>
-    <polygon points="160,100 210,174 110,174" fill="none" stroke="rgba(184,146,46,.04)" strokeWidth=".5"/>
-    <polygon points="160,220 110,146 210,146" fill="none" stroke="rgba(30,138,124,.03)" strokeWidth=".5"/>
-    <g fill="rgba(184,146,46,.18)">
-      <circle cx="160" cy="4"   r="1.8"/><circle cx="316" cy="160" r="1.8"/>
-      <circle cx="160" cy="316" r="1.8"/><circle cx="4"   cy="160" r="1.8"/>
-      <circle cx="272" cy="48"  r="1.3"/><circle cx="272" cy="272" r="1.3"/>
-      <circle cx="48"  cy="272" r="1.3"/><circle cx="48"  cy="48"  r="1.3"/>
-    </g>
-  </svg>
-);
-
-// ── Markdown ──────────────────────────────────────────────────────────────────
-// ── Code block renderer — like Claude ────────────────────────────────────────
-function CodeBlock({ lang, code }) {
-  const [copied, setCopied] = React.useState(false);
-  const [showPreview, setShowPreview] = React.useState(false);
-  const isRunnable = ["html","css","javascript","js","jsx"].includes((lang||"").toLowerCase());
-
-  const copyCode = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+function createSession() {
+  return {
+    id: crypto.randomUUID(),
+    title: "New workspace",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [],
+    mode: "auto",
   };
-
-  const previewCode = () => setShowPreview(p => !p);
-
-  // Build preview HTML for frontend code
-  const getPreviewHtml = () => {
-    const l = (lang||"").toLowerCase();
-    if (l === "html") return code;
-    if (l === "css")  return `<style>${code}</style><div style="padding:20px;background:#fff;min-height:100px;">CSS Preview</div>`;
-    if (l === "js" || l === "javascript") return `<script>${code}</script>`;
-    if (l === "jsx")  return `<div id="root"></div><script src="https://unpkg.com/react@18/umd/react.development.js"></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script><script src="https://unpkg.com/@babel/standalone/babel.min.js"></script><script type="text/babel">${code}</script>`;
-    return code;
-  };
-
-  return (
-    <div className="code-block">
-      <div className="code-header">
-        <span className="code-lang-badge">{lang || "code"}</span>
-        <div className="code-actions">
-          {isRunnable && (
-            <button className="code-btn" onClick={previewCode}>
-              {showPreview ? "▲ Hide Preview" : "▶ Preview"}
-            </button>
-          )}
-          <button className="code-btn" onClick={copyCode}>
-            {copied ? "✓ Copied" : "⎘ Copy"}
-          </button>
-        </div>
-      </div>
-      <pre className="code-pre"><code className="code-content">{code}</code></pre>
-      {showPreview && (
-        <div className="code-preview">
-          <div className="code-preview-label">Live Preview</div>
-          <iframe
-            className="code-iframe"
-            srcDoc={getPreviewHtml()}
-            sandbox="allow-scripts"
-            title="preview"
-          />
-        </div>
-      )}
-    </div>
-  );
 }
 
-function MD({ text = "", isComplete = true }) {
-  text = stripToolJson(text);
-  // Only auto-wrap raw code when streaming is complete
-  if (isComplete) text = wrapRawCode(text);
-
-  const inline = (str, key) => {
-    const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
-    return <span key={key}>{parts.map((p, i) => {
-      if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2,-2)}</strong>;
-      if (p.startsWith("*")  && p.endsWith("*"))  return <em key={i}>{p.slice(1,-1)}</em>;
-      if (p.startsWith("`")  && p.endsWith("`"))  return <code key={i} className="icode">{p.slice(1,-1)}</code>;
-      return p;
-    })}</span>;
-  };
-
-  const lines = text.split("\n");
-  const out = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const codeLines = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) codeLines.push(lines[i++]);
-      i++;
-      out.push(<CodeBlock key={"cb"+i} lang={lang} code={codeLines.join("\n")} />);
-      continue;
-    }
-    // Headings
-    if (/^### /.test(line)) { out.push(<h4 key={i} className="md-h3">{inline(line.slice(4),i)}</h4>); i++; continue; }
-    if (/^## /.test(line))  { out.push(<h3 key={i} className="md-h2">{inline(line.slice(3),i)}</h3>); i++; continue; }
-    if (/^# /.test(line))   { out.push(<h2 key={i} className="md-h1">{inline(line.slice(2),i)}</h2>); i++; continue; }
-    // Bold section headers
-    if (/^\*\*[^*]+\*\*\s*$/.test(line.trim())) {
-      out.push(<div key={i} className="md-section-header">{line.replace(/\*\*/g,"").trim()}</div>);
-      i++; continue;
-    }
-    // Bullet list
-    if (/^[-*•]\s/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^[-*•]\s/.test(lines[i])) items.push(lines[i++].replace(/^[-*•]\s/,""));
-      out.push(<ul key={i} className="md-ul">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ul>);
-      continue;
-    }
-    // Numbered list
-    if (/^\d+\.\s/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\d+\.\s/.test(lines[i])) items.push(lines[i++].replace(/^\d+\.\s/,""));
-      out.push(<ol key={i} className="md-ol">{items.map((t,j)=><li key={j}>{inline(t,j)}</li>)}</ol>);
-      continue;
-    }
-    // HR
-    if (/^---+$/.test(line.trim())) { out.push(<hr key={i} className="md-hr"/>); i++; continue; }
-    // Empty
-    if (!line.trim()) { out.push(<div key={i} className="md-gap"/>); i++; continue; }
-    // Paragraph
-    out.push(<p key={i} className="md-p">{inline(line,i)}</p>);
-    i++;
-  }
-  return <div className="md-root">{out}</div>;
-}
-
-
-// ── Login Page ────────────────────────────────────────────────────────────────
-function LoginPage() {
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState(null);
-  const handleGoogle = async () => {
-    setLoading(true); setError(null);
-    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-    catch (e) { setError(e.message); setLoading(false); }
-  };
-  return (
-    <div className="login-wrap">
-      <div className="login-card">
-        <div className="login-orb-wrap">
-          <YantraSmall />
-          <div className="ring1"/><div className="ring2"/>
-          <div className="orb" style={{cursor:"default"}}><ChakraSVG size={32} op=".78"/></div>
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div className="sb-name" style={{fontSize:"1.1rem"}}>Gyana AI</div>
-          <div className="brand-tag-login">ज्ञानं परमं बलम् · Knowledge · Wisdom</div>
-        </div>
-        <p className="login-sub">Friend · Guru · Assistant · Guide<br/>Sign in to begin.</p>
-        <button className="google-btn" onClick={handleGoogle} disabled={loading}>
-          <svg width="18" height="18" viewBox="0 0 48 48">
-            <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
-            <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
-            <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
-            <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
-          </svg>
-          {loading ? "Signing in…" : "Continue with Google"}
-        </button>
-        {error && <p style={{color:"#c05050",fontSize:".75rem",textAlign:"center"}}>{error}</p>}
-      </div>
-    </div>
-  );
-}
-
-// ── Auto-detect and wrap raw code blocks ─────────────────────────────────────
-function wrapRawCode(text) {
-  if (text.includes("```")) return text; // already has code blocks
-  const t = text.trim();
-  // Detect HTML document
-  if (/<(!DOCTYPE|html)/i.test(t) && t.length > 200) {
-    return "```html\n" + t + "\n```";
-  }
-  // Detect HTML snippet (lots of tags)
-  const tagCount = (t.match(/<[a-z][^>]*>/gi) || []).length;
-  if (tagCount > 5 && t.length > 300) {
-    return "```html\n" + t + "\n```";
-  }
-  // Detect Python
-  if (/^(import |from |def |class |if __name__)/.test(t) && t.includes("\n") && t.length > 80) {
-    return "```python\n" + t + "\n```";
-  }
-  // Detect JavaScript
-  if (/^(const |let |var |function |class |import |export |async function)/.test(t) && t.includes("\n") && t.length > 80) {
-    return "```javascript\n" + t + "\n```";
-  }
-  // Detect CSS
-  if (/^[a-z.*#@].*{/.test(t) && t.includes("{") && t.includes("}") && t.length > 100) {
-    return "```css\n" + t + "\n```";
-  }
-  return text;
-}
-
-// ── Text cleaner for TTS — strips ALL markdown and punctuation clutter ────────
-function stripToolJson(text) {
-  if (!text) return text;
-  // Remove any {"tool":...} JSON from start or anywhere in text
-  return text
-    .replace(/^\s*\{["']?tool["']?\s*:[^}]{0,500}\}\s*/g, '')
-    .replace(/\{["']?tool["']?\s*:[^}]{0,500}\}/g, '')
-    .trim();
-}
-
-function cleanForSpeech(text) {
-  return text
-    .replace(/\{"tool".*?\}/gs, "")
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/\*(.*?)\*/g, "$1")
-    .replace(/_{2}(.*?)_{2}/g, "$1")
-    .replace(/_(.*?)_/g, "$1")
-    .replace(/`{1,3}[^`]*`{1,3}/g, "")
-    .replace(/#{1,6}\s+/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-    .replace(/^[-*+]\s+/gm, "")
-    .replace(/^\d+\.\s+/gm, "")
-    .replace(/^>+\s*/gm, "")
-    .replace(/[-]{2,}/g, " ")
-    .replace(/[|]/g, " ")
-    .replace(/\n{2,}/g, ". ")
-    .replace(/\n/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .replace(/\.{2,}/g, ".")
-    .trim()
-    .slice(0, 450);
-}
-
-// ── Universal TTS helpers — available to all components ──────────────────────
-async function getBestVoice() {
-  const getVoices = () => new Promise(resolve => {
-    const v = window.speechSynthesis.getVoices();
-    if (v.length > 0) { resolve(v); return; }
-    window.speechSynthesis.onvoiceschanged = () => resolve(window.speechSynthesis.getVoices());
-    setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1500);
+function formatTime(dateLike) {
+  return new Date(dateLike).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
   });
-  const voices = await getVoices();
-  const preferred = [
-    // Best on Windows — natural sounding
-    v => v.name === "Microsoft Aria Online (Natural) - English (United States)",
-    v => v.name.includes("Microsoft Aria"),
-    v => v.name.includes("Microsoft Jenny"),
-    v => v.name.includes("Microsoft Ana"),
-    // Indian English — great for Indian users
-    v => v.name === "Microsoft Ravi - English (India)",
-    v => v.name.includes("Microsoft Ravi"),
-    v => v.name.includes("Microsoft Heera"),
-    // Good US English
-    v => v.name === "Google US English",
-    v => v.name.includes("Google UK English Female"),
-    v => v.name === "Microsoft Zira - English (United States)",
-    v => v.name.includes("Microsoft Zira"),
-    v => v.name === "Microsoft Mark - English (United States)",
-    v => v.name.includes("Microsoft David"),
-    // Apple voices
-    v => v.name === "Samantha" && v.lang.startsWith("en"),
-    v => v.name.includes("Samantha") && v.lang.startsWith("en"),
-    v => v.name.includes("Karen")    && v.lang.startsWith("en"),
-    v => v.name.includes("Daniel")   && v.lang.startsWith("en"),
-    // Generic fallbacks
-    v => v.lang === "en-IN" && v.localService,
-    v => v.lang === "en-US" && v.localService,
-    v => v.lang.startsWith("en") && v.localService,
-    v => v.lang.startsWith("en"),
-  ];
-  for (const m of preferred) {
-    const found = voices.find(m);
-    if (found) return found;
+}
+
+function formatDate(dateLike) {
+  return new Date(dateLike).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) && parsed.length ? parsed : [createSession()];
+  } catch {
+    return [createSession()];
   }
-  return null;
 }
 
-async function speakWithTTS(clean, onDone) {
-  window.speechSynthesis.cancel();
-  const voice = await getBestVoice();
-  const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
-  let idx = 0;
-  const speakNext = () => {
-    if (idx >= sentences.length) { onDone(); return; }
-    const sentence = sentences[idx++].trim();
-    if (!sentence) { speakNext(); return; }
-    const utt    = new SpeechSynthesisUtterance(sentence);
-    utt.lang     = "en-US";
-    utt.rate     = 0.88;
-    utt.pitch    = 1.0;
-    utt.volume   = 1.0;
-    if (voice) utt.voice = voice;
-    utt.onend    = speakNext;
-    utt.onerror  = onDone;
-    window.speechSynthesis.speak(utt);
-  };
-  speakNext();
+function saveSessions(sessions) {
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
 }
 
-// ── Guru Mode Overlay ─────────────────────────────────────────────────────────
-function GuruMode({ user, onClose }) {
-  const [phase,    setPhase]    = useState("idle");
-  const [response, setResponse] = useState("");
-  const [hintSeen, setHintSeen] = useState(false);
-  const [error,    setError]    = useState("");
-
-  // Use ref for history so sendToAI always has latest value without stale closure
-  const historyRef   = useRef([]);
-  const recRef       = useRef(null);
-  const silenceTimer = useRef(null);
-  const audioRef     = useRef(null);
-  const analyserRef  = useRef(null);
-  const animFrameRef = useRef(null);
-  const canvasRef    = useRef(null);
-  const streamRef    = useRef(null);
-  const ctxRef       = useRef(null);
-  const orbInnerRef  = useRef(null);
-  const orbIconRef   = useRef(null);
-  const wakeOnRef    = useRef(false);
-  const phaseRef     = useRef("idle");
-
-  const updatePhase = useCallback((p) => {
-    phaseRef.current = p;
-    setPhase(p);
-    if (p !== "idle") setHintSeen(true);
-
-    const inner = orbInnerRef.current;
-    const ico   = orbIconRef.current;
-    if (!inner) return;
-
-    const styles = {
-      idle:      ["linear-gradient(145deg,#1a6a60 0%,#080f0c 100%)", "0 0 0 1px rgba(184,146,46,.13),0 8px 28px rgba(0,0,0,.55),0 0 36px rgba(30,138,124,.1)",  "scale(1)"],
-      listening: ["linear-gradient(145deg,#1a8c7e 0%,#081410 100%)", "0 0 0 1px rgba(30,138,124,.22),0 8px 28px rgba(0,0,0,.55),0 0 50px rgba(30,138,124,.2)", "scale(1.04)"],
-      thinking:  ["linear-gradient(145deg,#6a5018 0%,#080f0c 100%)",  "0 0 0 1px rgba(184,146,46,.18),0 8px 28px rgba(0,0,0,.55),0 0 40px rgba(184,146,46,.1)","scale(1)"],
-      speaking:  ["linear-gradient(145deg,#1a7870 0%,#080f0c 100%)", "0 0 0 1px rgba(30,138,124,.18),0 8px 28px rgba(0,0,0,.55),0 0 44px rgba(30,138,124,.14)","scale(1.02)"],
-    };
-    const [bg, shadow, transform] = styles[p] || styles.idle;
-    inner.style.background = bg;
-    inner.style.boxShadow  = shadow;
-    inner.style.transform  = transform;
-    inner.style.transition = "all .5s ease";
-
-    if (ico) {
-      if (p === "listening" || p === "speaking") {
-        ico.innerHTML = '<line x1="4" y1="12" x2="4" y2="12"/><line x1="8" y1="8" x2="8" y2="16"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="16" y1="8" x2="16" y2="16"/><line x1="20" y1="12" x2="20" y2="12"/>';
-        ico.setAttribute("stroke-width", "1.8");
-      } else {
-        ico.innerHTML = '<rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>';
-        ico.setAttribute("stroke-width", "1.4");
-      }
-      ico.style.stroke = p === "idle" ? "rgba(255,255,255,.6)" : "rgba(255,255,255,.82)";
-    }
-  }, []);
-
-  const drawVisualiser = useCallback(() => {
-    const canvas = canvasRef.current, analyser = analyserRef.current;
-    if (!canvas || !analyser) return;
-    const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    const draw = () => {
-      animFrameRef.current = requestAnimationFrame(draw);
-      analyser.getByteFrequencyData(data);
-      ctx.clearRect(0, 0, W, H);
-      const bars = 44, bw = W / bars;
-      for (let i = 0; i < bars; i++) {
-        const val = data[Math.floor(i * data.length / bars)] / 255;
-        const h   = val * H * 0.82 + 2;
-        const grad = ctx.createLinearGradient(0, (H-h)/2, 0, (H+h)/2);
-        grad.addColorStop(0, `rgba(184,146,46,${0.25 + val * 0.6})`);
-        grad.addColorStop(1, `rgba(30,138,124,${0.25 + val * 0.6})`);
-        ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.roundRect(i*bw+1, (H-h)/2, bw-2, h, 1.5); ctx.fill();
-      }
-    };
-    draw();
-  }, []);
-  const stopVisualiser = useCallback(() => {
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    animFrameRef.current = null;
-  }, []);
-
-  // ── Universal TTS — works on ALL platforms, free forever ─────────────────
-
-  const speakText = useCallback(async (text) => {
-    updatePhase("speaking");
-    const clean = cleanForSpeech(text);
-    if (!clean) { updatePhase("idle"); return; }
-
-    // Try ElevenLabs first if key available
-    if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
-      try {
-        const res = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
-          {
-            method: "POST",
-            headers: { "xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: clean,
-              model_id: "eleven_multilingual_v2",
-              voice_settings: { stability: 0.5, similarity_boost: 0.85, style: 0.2, use_speaker_boost: true },
-            }),
-          }
-        );
-        if (!res.ok) throw new Error();
-        const blob = await res.blob();
-        const url  = URL.createObjectURL(blob);
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
-        audioRef.current = new Audio(url);
-        audioRef.current.onended = () => { updatePhase("idle"); URL.revokeObjectURL(url); };
-        audioRef.current.onerror = () => updatePhase("idle");
-        await audioRef.current.play();
-        return;
-      } catch (_) {}
-    }
-
-    // Universal browser TTS — sentence by sentence to avoid Chrome cutoff
-    await speakWithTTS(clean, () => updatePhase("idle"));
-  }, [updatePhase]);
-
-  // ── Send to AI — uses ref for history so no stale closure ──────────────────
-  const sendToAI = useCallback(async (transcript) => {
-    if (!transcript.trim()) { updatePhase("idle"); return; }
-    setResponse(""); setError("");
-    updatePhase("thinking");
-
-    // Build history from ref — always fresh
-    const newHistory = [...historyRef.current, { role: "user", content: transcript }];
-    historyRef.current = newHistory;
-
-    try {
-      let answer = "";
-      if (GROQ_KEY) {
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_KEY}` },
-          body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            messages: [
-              { role: "system", content: GURU_PROMPT },
-              ...newHistory.slice(-12),
-            ],
-            temperature: 0.6,
-            max_tokens: 120,
-          }),
-        });
-        if (!res.ok) throw new Error(`Groq ${res.status}`);
-        const data = await res.json();
-        answer = data.choices?.[0]?.message?.content?.trim() || "Could you say that again?";
-      } else {
-        const { data } = await axios.post(`${API}/ask-general`, {
-          question: transcript,
-          user_id: user?.uid || "default",
-        });
-        answer = data.answer || "Could you say that again?";
-      }
-
-      // Add assistant reply to history ref
-      historyRef.current = [...newHistory, { role: "assistant", content: answer }];
-      setResponse(stripToolJson(answer));
-      await speakText(answer);
-    } catch (err) {
-      console.error("AI error:", err);
-      setError("Connection issue. Please try again.");
-      updatePhase("idle");
-    }
-  }, [speakText, updatePhase, user]);
-
-  // ── Start listening — mobile-safe MediaRecorder ─────────────────────────────
-  const startListening = useCallback(async () => {
-    if (phaseRef.current === "speaking") {
-      audioRef.current?.pause();
-      window.speechSynthesis.cancel();
-      updatePhase("idle");
-      return;
-    }
-    if (phaseRef.current !== "idle") return;
-    setError(""); setResponse("");
-    updatePhase("listening");
-
-    // MediaRecorder — works on ALL browsers including Brave
-    // Sent to Groq Whisper for fast transcription
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioCtx();
-      ctxRef.current  = audioCtx;
-      const src       = audioCtx.createMediaStreamSource(stream);
-      const analyser  = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      src.connect(analyser);
-      analyserRef.current = analyser;
-      drawVisualiser();
-
-      // Pick best supported format
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/mp4")  ? "audio/mp4"
-        : "";
-
-      const mr     = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
-      recRef.current = mr;
-      const chunks = [];
-
-      mr.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
-      mr.onstop = async () => {
-        stopVisualiser();
-        stream.getTracks().forEach(t => t.stop());
-        try { audioCtx.close(); } catch (_) {}
-        updatePhase("thinking");
-
-        const blobType = mime || "audio/webm";
-        const blob     = new Blob(chunks, { type: blobType });
-        const form     = new FormData();
-        form.append("file", blob, mime?.includes("mp4") ? "guru.mp4" : "guru.webm");
-
-        try {
-          // Wake up HuggingFace Space if sleeping
-          try { await axios.get(`${API}/health`, { timeout: 8000 }); } catch (_) {}
-
-          const { data } = await axios.post(`${API}/transcribe`, form, {
-            headers: { "x-user-id": user?.uid || "default" },
-            timeout: 30000, // 30s timeout for transcription
-          });
-          const transcript = data.text || data.transcription || "";
-          if (!transcript.trim()) {
-            setError("Could not hear speech. Speak clearly and try again.");
-            updatePhase("idle");
-            return;
-          }
-          await sendToAI(transcript);
-        } catch (err) {
-          console.error("Transcribe error:", err);
-          if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
-            setError("Server is waking up. Please try again in 10 seconds.");
-          } else if (err.response?.status === 500) {
-            setError("Transcription failed. Try speaking louder and clearer.");
-          } else {
-            setError("Connection error. Check your internet and try again.");
-          }
-          updatePhase("idle");
-        }
-      };
-
-      mr.start(200);
-
-      // Silence detection — stops after 1.2s of quiet
-      // threshold 15 = normal room silence, good for most mics
-      const sa = audioCtx.createAnalyser();
-      sa.fftSize = 512;
-      src.connect(sa);
-      const sd = new Uint8Array(sa.frequencyBinCount);
-      let silenceStart = null;
-      let hasSpoken    = false; // wait for user to actually speak first
-      const SILENCE_THRESHOLD = 15;  // raise from 8 to 15
-      const SILENCE_DURATION  = 1200; // 1.2s of silence to stop
-      const check = () => {
-        if (!recRef.current || recRef.current.state === "inactive") return;
-        sa.getByteFrequencyData(sd);
-        const avg = sd.reduce((a, b) => a + b, 0) / sd.length;
-        if (avg > SILENCE_THRESHOLD) {
-          hasSpoken    = true;  // user started speaking
-          silenceStart = null;
-        } else if (hasSpoken) {
-          // Only count silence AFTER user has spoken
-          if (!silenceStart) silenceStart = Date.now();
-          else if (Date.now() - silenceStart > SILENCE_DURATION) {
-            mr.stop(); return;
-          }
-        }
-        silenceTimer.current = setTimeout(check, 80);
-      };
-      setTimeout(check, 300); // start checking sooner
-
-    } catch (e) {
-      if (e.name === "NotAllowedError") {
-        setError("Microphone access denied. Please allow microphone in browser settings.");
-      } else {
-        setError(`Microphone error: ${e.message}`);
-      }
-      updatePhase("idle");
-    }
-  }, [drawVisualiser, stopVisualiser, sendToAI, updatePhase, user]);
-  // Wake word inside Guru Mode
-  useEffect(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    const rec = new SR();
-    rec.continuous = true; rec.lang = "en-IN"; rec.interimResults = true;
-    wakeOnRef.current = true;
-    rec.onresult = e => {
-      const t = Array.from(e.results).map(r => r[0].transcript).join("").toLowerCase();
-      if ((t.includes("hey guru") || t.includes("hae guru")) && phaseRef.current === "idle") {
-        startListening();
-      }
-    };
-    rec.onerror = () => {};
-    rec.onend = () => {
-      if (wakeOnRef.current) setTimeout(() => { try { rec.start(); } catch (_) {} }, 400);
-    };
-    try { rec.start(); } catch (_) {}
-    return () => { wakeOnRef.current = false; try { rec.stop(); } catch (_) {} };
-  }, [startListening]);
-
-  // Cleanup on unmount
-  useEffect(() => () => {
-    wakeOnRef.current = false;
-    window.speechSynthesis?.cancel();
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
-    stopVisualiser();
-    clearTimeout(silenceTimer.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    try { ctxRef.current?.close(); } catch (_) {}
-  }, [stopVisualiser]);
-
-  const phaseLabel = { idle: "", listening: "Listening", thinking: "Processing", speaking: "Speaking" }[phase];
-
-  return (
-    <div className="guru-overlay">
-      <button className="gcls" onClick={onClose}><CloseSVG /></button>
-      <div className="g-label">Guru Mode</div>
-
-      <div className="gorb-wrap">
-        <YantraLarge />
-        <div className="g-r1" /><div className="g-r2" />
-        <div className="g-glow-ring" />
-        <div className="gorb" onClick={startListening}>
-          <div className="gorb-inner" ref={orbInnerRef}>
-            <svg ref={orbIconRef} width="36" height="36" viewBox="0 0 24 24" fill="none"
-              stroke="rgba(255,255,255,.6)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="9" y="2" width="6" height="11" rx="3"/>
-              <path d="M5 10a7 7 0 0 0 14 0"/>
-              <line x1="12" y1="19" x2="12" y2="22"/>
-              <line x1="8"  y1="22" x2="16" y2="22"/>
-            </svg>
-          </div>
-        </div>
-      </div>
-
-      {/* Visualiser — shown only when listening */}
-      <canvas ref={canvasRef} className="gcanvas" width={220} height={36}
-        style={{ opacity: phase === "listening" ? 1 : 0 }} />
-
-      {/* Status label */}
-      {phase !== "idle" && (
-        <div className="g-status show">{phaseLabel}</div>
-      )}
-
-      {/* Hint — shown until first use */}
-      {!hintSeen && (
-        <div className="g-hint">Say <em>hey guru</em> — or tap the orb</div>
-      )}
-
-      {/* Response card — only shown after reply */}
-      {response && stripToolJson(response) && (
-        <div className="g-card show">
-          <span className="g-card-lbl">Gyana AI</span>
-          <span className="g-card-txt">{stripToolJson(response)}</span>
-        </div>
-      )}
-
-      {error && <p className="g-error">{error}</p>}
-
-      <div className="g-foot">
-        {phase === "speaking"
-          ? "Tap to interrupt"
-          : phase === "idle"
-          ? "Tap the orb to speak · Pauses automatically"
-          : ""}
-      </div>
-    </div>
-  );
+function fileLabel(name) {
+  const ext = name?.split(".").pop()?.toLowerCase();
+  if (["pdf"].includes(ext)) return "PDF";
+  if (["docx"].includes(ext)) return "DOCX";
+  if (["pptx"].includes(ext)) return "PPTX";
+  if (["txt"].includes(ext)) return "TXT";
+  if (["png", "jpg", "jpeg"].includes(ext)) return "IMG";
+  if (["mp3", "wav", "m4a", "webm"].includes(ext)) return "AUDIO";
+  return "FILE";
 }
 
-// =============================================================================
-//  MAIN APP
-// =============================================================================
-function AppInner() {
-  const [user,          setUser]          = useState(undefined);
-  const [docs,          setDocs]          = useState([]);
-  const [msgs,          setMsgs]          = useState([]);
-  const [input,         setInput]         = useState("");
-  const [loading,       setLoading]       = useState(false);
-  const [drag,          setDrag]          = useState(false);
-  const [micOn,         setMicOn]         = useState(false);
-  const [micSec,        setMicSec]        = useState(0);
-  const [toast,         setToast]         = useState(null);
-  const [copied,        setCopied]        = useState(null);
-  const [speaking,      setSpeaking]      = useState(null);
-  const [autoSpeak,     setAutoSpeak]     = useState(false);
-  const [sidebarOpen,   setSidebarOpen]   = useState(false);
-  const [conversations, setConversations] = useState([]);
-  const [activeConvId,  setActiveConvId]  = useState(null);
-  const [sidebarTab,    setSidebarTab]    = useState("docs");
-  const [guruOpen,      setGuruOpen]      = useState(false);
-  const [statusMsg,     setStatusMsg]     = useState("");
-
-  const feedRef        = useRef(null);
-  const fileRef        = useRef(null);
-  const taRef          = useRef(null);
-  const bottomRef      = useRef(null);
-  const recRef         = useRef(null);
-  const micTmr         = useRef(null);
-  const abortRef       = useRef(null);
-  const currentConvRef = useRef(null);
-  const wakeOnRef      = useRef(false);
-
-  // Auth
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => { setUser(u??null); if(u) setConversations(loadConversations(u.uid)); });
-    return unsub;
-  }, []);
-
-  // Global wake word
-  useEffect(() => {
-    if (!user||guruOpen) return;
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return;
-    const rec=new SR(); rec.continuous=true; rec.lang="en-IN"; rec.interimResults=true;
-    wakeOnRef.current=true;
-    rec.onresult=e=>{
-      const t=Array.from(e.results).map(r=>r[0].transcript).join("").toLowerCase();
-      if(t.includes("hey guru")||t.includes("hae guru")){rec.stop();setGuruOpen(true);}
-    };
-    rec.onerror=()=>{};
-    rec.onend=()=>{if(wakeOnRef.current)setTimeout(()=>{try{rec.start()}catch(_){}},400);};
-    try{rec.start()}catch(_){}
-    return ()=>{wakeOnRef.current=false;try{rec.stop()}catch(_){}};
-  },[user,guruOpen]);
-
-  const readyDocs   = docs.filter(d=>d.status==="ready");
-  const authHeaders = useCallback(()=>({"x-user-id":user?.uid||"default"}),[user]);
-
-  // Scroll to bottom when messages update — never fires on empty/welcome screen
-  useEffect(() => {
-    if (msgs.length === 0) return;
-    requestAnimationFrame(() => {
-      if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
-    });
-  }, [msgs]);
-  useEffect(()=>{const ta=taRef.current;if(!ta)return;ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,140)+"px";},[input]);
-  useEffect(()=>{
-    if(!sidebarOpen) return;
-    const h=e=>{if(!e.target.closest(".sidebar"))setSidebarOpen(false);};
-    document.addEventListener("mousedown",h);
-    return ()=>document.removeEventListener("mousedown",h);
-  },[sidebarOpen]);
-
-  const notify = useCallback((msg,type="ok")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);},[]);
-  const pushMsg  = m   => setMsgs(p=>[...p,{id:uid(),...m}]);
-  const patchMsg = (id,u) => setMsgs(p=>p.map(m=>m.id===id?(typeof u==="function"?{...m,...u(m)}:{...m,...u}):m));
-
-  const saveCurrentConversation = useCallback((messages,convId)=>{
-    if(!user||messages.length===0) return;
-    const convs=loadConversations(user.uid);
-    const idx=convs.findIndex(c=>c.id===convId);
-    const conv={id:convId,title:messages[0]?.text?.slice(0,40)||"Conversation",messages,date:dateStr(),timestamp:Date.now()};
-    if(idx>=0)convs[idx]=conv;else convs.unshift(conv);
-    const trimmed=convs.slice(0,50);
-    saveConversations(user.uid,trimmed); setConversations(trimmed);
-  },[user]);
-
-  const loadConversation = conv=>{setMsgs(conv.messages);setActiveConvId(conv.id);currentConvRef.current=conv.id;setSidebarOpen(false);};
-  const deleteConversation=(convId,e)=>{
-    e.stopPropagation();
-    const convs=loadConversations(user.uid).filter(c=>c.id!==convId);
-    saveConversations(user.uid,convs);setConversations(convs);
-    if(activeConvId===convId){setMsgs([]);setActiveConvId(null);currentConvRef.current=null;}
-  };
-  const startNewConversation=()=>{
-    if(msgs.length>0&&currentConvRef.current) saveCurrentConversation(msgs,currentConvRef.current);
-    setMsgs([]);setInput("");setActiveConvId(null);currentConvRef.current=null;setSidebarOpen(false);
-  };
-  useEffect(()=>{
-    const last=msgs[msgs.length-1];
-    if(last?.role==="ai"&&!last?.streaming&&currentConvRef.current&&user) saveCurrentConversation(msgs,currentConvRef.current);
-  },[msgs,user,saveCurrentConversation]);
-
-  // TTS
-  const stopSpeaking=useCallback(()=>{window.speechSynthesis?.cancel();setSpeaking(null);},[]);
-  const speakMsg = useCallback(async (id, text) => {
-    if (speaking === id) { stopSpeaking(); return; }
-    window.speechSynthesis?.cancel();
-    setSpeaking(id); // set immediately — prevents flicker
-    const clean = cleanForSpeech(text);
-    if (!clean) { setSpeaking(null); return; }
-
-    // Try ElevenLabs if available
-    if (ELEVEN_API_KEY && ELEVEN_VOICE_ID) {
-      try {
-        const res = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`,
-          {
-            method: "POST",
-            headers: { "xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: clean,
-              model_id: "eleven_multilingual_v2",
-              voice_settings: { stability: 0.5, similarity_boost: 0.85, style: 0.2, use_speaker_boost: true },
-            }),
-          }
-        );
-        if (!res.ok) throw new Error();
-        const blob = await res.blob(), url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.onended = () => { setSpeaking(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => setSpeaking(null);
-        await audio.play(); return;
-      } catch (_) {}
-    }
-
-    // Universal TTS — sentence by sentence, no cutoff
-    await speakWithTTS(clean, () => setSpeaking(null));
-  }, [speaking, stopSpeaking]);
-  useEffect(()=>{
-    const last=msgs[msgs.length-1];
-    if(autoSpeak&&last?.role==="ai"&&!last?.streaming&&last?.text&&!last?.error) speakMsg(last.id,last.text);
-  },[msgs,autoSpeak,speakMsg]);
-
-  // File upload
-  const handleFiles=useCallback(async(files)=>{
-    for(const file of Array.from(files)){
-      const id=uid();
-      setDocs(p=>[...p,{id,name:file.name,size:fileSz(file.size),status:"uploading",progress:0}]);
-      try{
-        const form=new FormData();form.append("file",file);
-        const{data}=await axios.post(`${API}/upload`,form,{headers:authHeaders(),onUploadProgress:e=>{if(e.total)setDocs(p=>p.map(d=>d.id===id?{...d,progress:Math.round(e.loaded*100/e.total)}:d));}});
-        setDocs(p=>p.map(d=>d.id===id?{...d,status:"ready",progress:100,lang:data.detected_language,chunks:data.chunks_created}:d));
-        notify(`✓ ${file.name} — ${data.chunks_created} chunks indexed`);
-      }catch(e){setDocs(p=>p.map(d=>d.id===id?{...d,status:"error"}:d));notify(e.response?.data?.detail||e.message,"err");}
-    }
-  },[notify,authHeaders]);
-  const onDrop=useCallback(e=>{e.preventDefault();setDrag(false);handleFiles(e.dataTransfer.files);},[handleFiles]);
-  const clearDocs=async()=>{try{await axios.delete(`${API}/documents`,{headers:authHeaders()});setDocs([]);notify("Knowledge base cleared");}catch(e){notify(e.response?.data?.detail||e.message,"err");}};
-
-  // Agentic stream handler — handles all tool responses
-  const processAgenticStream = useCallback(async(endpoint, question, aiId) => {
-    const userId = user?.uid || "default";
-    let got = false;
-    try {
-      const res = await fetch(`${API}${endpoint}`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({question, user_id: userId}),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const reader = res.body.getReader(), dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const {done, value} = await reader.read(); if (done) break;
-        buf += dec.decode(value, {stream: true});
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const token = line.slice(6);
-          if (!token) continue;
-
-          // Strip tool JSON that leaked from backend — never show to user
-          if (token.includes('{"tool"') || token.startsWith('{"tool')) continue;
-
-          if (token === "[DONE]") {
-            patchMsg(aiId, {streaming: false});
-            setLoading(false); setStatusMsg("");
-            return;
-          }
-          if (token.startsWith("[ERROR]")) {
-            patchMsg(aiId, {streaming: false, error: true, text: token.slice(7)});
-            setLoading(false); setStatusMsg("");
-            return;
-          }
-          if (token.startsWith("[STATUS]")) {
-            setStatusMsg(token.slice(8));
-            continue;
-          }
-          if (token.startsWith("[IMAGE]")) {
-            const b64 = token.slice(7);
-            patchMsg(aiId, m => ({images: [...(m.images||[]), b64]}));
-            continue;
-          }
-          if (token.startsWith("[CODE_RESULT]")) {
-            try {
-              const cr = JSON.parse(token.slice(13));
-              patchMsg(aiId, m => ({codeResults: [...(m.codeResults||[]), cr]}));
-            } catch(_) {}
-            continue;
-          }
-          if (token.startsWith("[FILE]")) {
-            try {
-              const fd = JSON.parse(token.slice(6));
-              patchMsg(aiId, m => ({files: [...(m.files||[]), fd]}));
-            } catch(_) {}
-            continue;
-          }
-          if (token.startsWith("[SOURCES]")) {
-            try {
-              const srcs = JSON.parse(token.slice(9));
-              patchMsg(aiId, {sources: srcs});
-            } catch(_) {}
-            continue;
-          }
-          // Regular text token — strip any tool JSON that leaked
-          got = true;
-          const cleanToken = token.replace(/\{"tool"[^}]*\}/g, "").replace(/\{[^}]*"tool"[^}]*\}/g, "");
-          if (cleanToken) patchMsg(aiId, m => ({text: (m.text||"") + cleanToken.replace(/\\n/g, "\n")}));
-        }
-      }
-    } catch(_) {}
-    if (!got) {
-      try {
-        const {data} = await axios.post(`${API}/ask-general`, {question, user_id: userId});
-        patchMsg(aiId, {text: data.answer, sources: [], streaming: false});
-      } catch {
-        patchMsg(aiId, {text: "Connection error. Please try again.", error: true, streaming: false});
-      }
-    }
-    setLoading(false); setStatusMsg("");
-  }, [user, patchMsg]);
-
-  const askGeneralAI = useCallback(async (question, aiId) => {
-    await processAgenticStream("/ask-general/stream", question, aiId);
-  }, [processAgenticStream]);
-
-  // Unified smart send — always tries docs first if uploaded, falls back to general AI
-  const send=useCallback(async(override)=>{
-    const q=(override??input).trim();
-    if(!q||loading)return;
-    if(!currentConvRef.current){const newId=uid();currentConvRef.current=newId;setActiveConvId(newId);}
-    pushMsg({role:"user",text:q,time:timeNow()});
-    setInput("");setLoading(true);
-    const aiId=uid();
-    pushMsg({id:aiId,role:"ai",text:"",time:timeNow(),sources:[],streaming:true,error:false});
-
-    const userId=user?.uid||"default";
-
-    // If no docs uploaded, go straight to general AI
-    if(!readyDocs.length){
-      await processAgenticStream("/ask-general/stream", q, aiId);
-      return;
-    }
-
-    // Docs are uploaded — try doc search first
-    let gotStream=false; let fullText="";
-    const fallback=setTimeout(async()=>{
-      if(gotStream)return;abortRef.current?.();
-      try{
-        const{data}=await axios.post(`${API}/ask`,{question:q,user_id:userId});
-        const ans=data.answer||"";
-        const noInfo=!ans.trim()||
-          ans.toLowerCase().includes("not found in")||
-          ans.toLowerCase().includes("i don't have information")||
-          ans.toLowerCase().includes("no relevant")||
-          ans.toLowerCase().includes("cannot find")||
-          (data.sources&&data.sources.length===0&&ans.length<100);
-        if(noInfo){
-          patchMsg(aiId,{text:"",sources:[],streaming:true});
-          await askGeneralAI(q,aiId);
-          return;
-        }
-        patchMsg(aiId,{text:ans,sources:data.sources??[],streaming:false});
-      }catch(e){
-        // Doc search failed — fall back to general AI
-        await askGeneralAI(q,aiId);
-        return;
-      }finally{setLoading(false);}
-    },4000);
-
-    // Use the full agentic stream for doc mode too
-    clearTimeout(fallback);
-    await processAgenticStream("/ask/stream", q, aiId);
-  },[input,loading,readyDocs,notify,user,processAgenticStream]);
-
-  // Mic
-  const startMic=useCallback(async()=>{
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"audio/webm";
-      const mr=new MediaRecorder(stream,{mimeType:mime});recRef.current=mr;const chunks=[];
-      mr.ondataavailable=e=>e.data?.size>0&&chunks.push(e.data);
-      mr.onstop=async()=>{
-        stream.getTracks().forEach(t=>t.stop());clearInterval(micTmr.current);setMicSec(0);setMicOn(false);
-        const blob=new Blob(chunks,{type:mime}),form=new FormData();form.append("file",blob,"voice.webm");
-        try{notify("Transcribing…","info");const{data}=await axios.post(`${API}/speech-query`,form,{headers:authHeaders()});pushMsg({role:"user",text:`🎤 ${data.transcribed_question}`,time:timeNow()});pushMsg({role:"ai",text:data.answer,time:timeNow(),sources:data.sources??[],streaming:false,error:false});}
-        catch(e){notify(e.response?.data?.detail||e.message,"err");}
-      };
-      mr.start(200);setMicOn(true);setMicSec(0);micTmr.current=setInterval(()=>setMicSec(s=>s+1),1000);
-    }catch(e){notify(e.name==="NotAllowedError"?"Microphone access denied":e.message,"err");}
-  },[notify,authHeaders]);
-  const stopMic=useCallback(()=>{recRef.current?.state!=="inactive"&&recRef.current?.stop();},[]);
-  const fmtMic=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-  const copyMsg=(id,text)=>{navigator.clipboard.writeText(text).catch(()=>{});setCopied(id);setTimeout(()=>setCopied(null),1800);};
-  const handleSignOut=async()=>{await signOut(auth);setDocs([]);setMsgs([]);setConversations([]);};
-
-  if (user===undefined) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100dvh",background:"var(--bg)",color:"var(--g2)",fontSize:".82rem",letterSpacing:".15em",fontFamily:"var(--cap)"}}>Awakening Gyana AI…</div>;
-  if (user===null) return <LoginPage/>;
-
-  const suggestions = DOC_SUGGESTIONS;
-  const placeholder = micOn ? "Recording…" : readyDocs.length===0 ? "Ask anything, or upload a document…" : "Ask anything about your documents…";
-
-  return (
-    <>
-      {guruOpen && <GuruMode user={user} onClose={()=>setGuruOpen(false)}/>}
-
-      <div className="shell">
-        <div className={`sidebar-overlay${sidebarOpen?" open":""}`} onClick={()=>setSidebarOpen(false)}/>
-
-        {/* ── Sidebar ── */}
-        <aside className={`sidebar${sidebarOpen?" open":""}`}>
-          <div className="sb-sheen"/>
-
-          <div className="sb-brand">
-            <div className="sb-icon"><ChakraSVG size={18}/></div>
-            <div>
-              <div className="sb-name">Gyana AI</div>
-              <div className="sb-tagline">Knowledge · Wisdom</div>
-            </div>
-            <button className="sb-close-btn" onClick={()=>setSidebarOpen(false)}><CloseSVG/></button>
-          </div>
-
-          <div className="user-row">
-            {user.photoURL&&<img src={user.photoURL} alt="" width={22} height={22} style={{borderRadius:"50%",flexShrink:0}}/>}
-            <span className="uname">{user.displayName||user.email}</span>
-            <button className="out-btn" onClick={handleSignOut} title="Sign out">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-              </svg>
-            </button>
-          </div>
-
-          <button className="new-btn" onClick={startNewConversation}><PlusSVG/> New conversation</button>
-
-          <div className="sb-tabs">
-            {["docs","history"].map(tab=>(
-              <button key={tab} className={`sb-tab${sidebarTab===tab?" on":""}`} onClick={()=>setSidebarTab(tab)}>
-                {tab==="docs"?"Documents":"History"}
-              </button>
-            ))}
-          </div>
-
-          {sidebarTab==="docs"&&(<>
-            <p className="sb-label">Knowledge Base</p>
-            <div className={`dz${drag?" dz-over":""}`} role="button" tabIndex={0}
-              onClick={()=>fileRef.current?.click()}
-              onDragOver={e=>{e.preventDefault();setDrag(true);}}
-              onDragLeave={()=>setDrag(false)} onDrop={onDrop}
-              onKeyDown={e=>e.key==="Enter"&&fileRef.current?.click()}>
-              <div className="dz-ring"><UploadSVG/></div>
-              <span className="dz-t">Drop files or click to upload</span>
-              <span className="dz-s">PDF · DOCX · PPTX · TXT · Images · Audio</span>
-            </div>
-            <input ref={fileRef} type="file" hidden multiple accept={ACCEPT} onChange={e=>handleFiles(e.target.files)}/>
-            <div className="doc-list">
-              {docs.map((d,i)=>(
-                <div key={d.id} className={`doc-row${d.status==="error"?" doc-err":""}`} style={{animationDelay:`${i*.05}s`}}>
-                  <div className="doc-ico">{fileIcon(d.name)}</div>
-                  <div className="doc-info">
-                    <div className="doc-name" title={d.name}>{d.name}</div>
-                    <div className="doc-meta">{d.size}{d.lang&&d.lang!=="unknown"?` · ${d.lang.toUpperCase()}`:""}{d.chunks?` · ${d.chunks} chunks`:""}</div>
-                    {d.status==="uploading"&&<div className="doc-bar"><div className="doc-fill" style={{width:`${d.progress}%`}}/></div>}
-                  </div>
-                  <div className={`doc-dot ${d.status}`}/>
-                </div>
-              ))}
-            </div>
-            {readyDocs.length>0&&<button className="clear-btn" onClick={clearDocs}>Remove all documents</button>}
-          </>)}
-
-          {sidebarTab==="history"&&(<>
-            <p className="sb-label">Chat History</p>
-            <div className="conv-list">
-              {conversations.length===0
-                ?<div className="conv-empty">No conversations yet.</div>
-                :conversations.map(conv=>(
-                  <div key={conv.id} className={`conv-item${activeConvId===conv.id?" active":""}`} onClick={()=>loadConversation(conv)}>
-                    <div className="conv-ico"><ChatSVG/></div>
-                    <div className="conv-info">
-                      <div className="conv-title">{conv.title}</div>
-                      <div className="conv-meta">{conv.date} · {conv.messages.length} msgs</div>
-                    </div>
-                    <button className="conv-del" onClick={e=>deleteConversation(conv.id,e)}>✕</button>
-                  </div>
-                ))
-              }
-            </div>
-          </>)}
-
-          <div className="sb-spacer"/>
-          <div className="sb-foot">
-            <button className="guru-sb-btn" onClick={()=>setGuruOpen(true)}>
-              <ChakraSVG size={13} op=".65"/> Guru Mode
-            </button>
-            <div className="model-pill">
-              <div className="model-led"/>
-              <div><div className="model-name">LLaMA 3.3 70B</div><div className="model-sub">Groq · Supabase · ElevenLabs</div></div>
-            </div>
-            <p className="doc-count">{readyDocs.length===0?"No documents indexed":`${readyDocs.length} doc${readyDocs.length>1?"s":""} in context`}</p>
-          </div>
-        </aside>
-
-        {/* ── Main ── */}
-        <div className="main">
-          <div className="glow g1"/><div className="glow g2"/>
-
-          <div className="topbar">
-            <div className="tb-left">
-              <button className="menu-btn" onClick={()=>setSidebarOpen(true)}><MenuSVG/></button>
-              <span className="tb-title">Gyana AI</span>
-              {readyDocs.length>0&&(
-                <div className="ctx-pill">
-                  <span className="ctx-led"/>
-                  <span className="ctx-txt">{readyDocs.slice(0,2).map(d=>d.name).join(" · ")}{readyDocs.length>2?` +${readyDocs.length-2} more`:""}</span>
-                </div>
-              )}
-            </div>
-            <div className="tb-right">
-              <button className="guru-tb-btn" onClick={()=>setGuruOpen(true)}>
-                <ChakraSVG size={11} op=".65"/> Guru Mode
-              </button>
-              <button className="top-btn" onClick={()=>{if(autoSpeak)stopSpeaking();setAutoSpeak(p=>!p);}}
-                style={autoSpeak?{borderColor:"rgba(184,146,46,.3)",color:"var(--g2)",background:"rgba(184,146,46,.08)"}:{}}>
-                {autoSpeak?"🔊":"🔇"}
-              </button>
-
-              {msgs.length>0&&<button className="top-btn" onClick={startNewConversation}>Clear</button>}
-            </div>
-          </div>
-
-          {statusMsg&&(
-            <div style={{position:"absolute",top:"54px",left:"50%",transform:"translateX(-50%)",zIndex:20,
-              padding:"6px 16px",background:"rgba(30,138,124,.12)",border:"1px solid rgba(30,138,124,.2)",
-              borderRadius:"20px",fontSize:".7rem",color:"var(--t3)",fontFamily:"var(--cap)",
-              letterSpacing:".1em",textTransform:"uppercase",whiteSpace:"nowrap",backdropFilter:"blur(10px)"}}>
-              ◎ {statusMsg}
-            </div>
-          )}
-          <div className="feed" ref={feedRef}>
-            {/* Welcome screen */}
-            <div className="welcome" style={{display:msgs.length===0?"flex":"none"}}>
-              <div className="orb-wrap">
-                <YantraSmall/>
-                <div className="ring1"/><div className="ring2"/>
-                <div className="orb" onClick={()=>setGuruOpen(true)}>
-                  <ChakraSVG size={36} op=".78"/>
-                </div>
-              </div>
-              <h1 className="wh">Hey <em>Guru</em></h1>
-              <div className="wsub">Gyana AI · Knowledge System</div>
-              <p className="wp">
-                Upload documents and ask anything. Gyana reads them automatically.<br/>
-                Or say <span>"Hey Guru"</span> to activate live voice.
-              </p>
-              <button className="guru-cta" onClick={()=>setGuruOpen(true)}>
-                <ChakraSVG size={12} op=".65"/> Enter Guru Mode
-              </button>
-              <div className="sug-grid">
-                {suggestions.map(s=>(
-                  <button key={s.title} className="sug-card" onClick={()=>send(s.title)} disabled={loading}>
-                    <span className="sug-t">{s.title}</span>
-                    <span className="sug-d">{s.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Messages */}
-            {msgs.length>0&&(
-              <div className="msgs">
-                {msgs.map(msg=>msg.role==="user"?(
-                  <div key={msg.id} className="turn">
-                    <div className="h-row">
-                      <div className="h-time">{msg.time}</div>
-                      <div className="h-bub">{msg.text}</div>
-                    </div>
-                  </div>
-                ):(
-                  <div key={msg.id} className="turn">
-                    <div className="a-row">
-                      <div className="a-av"><ChakraSVG size={13} op=".9"/></div>
-                      <div className="a-body">
-                        <div className="a-meta"><span className="a-name">Gyana AI</span><span className="a-time">{msg.time}</span></div>
-                        <div className={`a-text${msg.error?" a-err":""}`}>
-                          {msg.text?<MD text={msg.text} isComplete={!msg.streaming}/>:msg.streaming?<div className="typing"><span/><span/><span/></div>:null}
-                          {msg.streaming&&msg.text&&<span className="cur"/>}
-                        </div>
-                        {!msg.streaming&&msg.sources?.length>0&&(
-                          <div className="sources">
-                            <span className="src-lbl">Sources —</span>
-                            {msg.sources.map((s,i)=><span key={i} className="src-chip">{s}</span>)}
-                          </div>
-                        )}
-                        {msg.images?.length>0&&msg.images.map((b64,i)=>(
-                          <div key={i} style={{marginTop:"10px"}}>
-                            <img src={`data:image/png;base64,${b64}`} alt="Generated" style={{maxWidth:"100%",borderRadius:"10px",border:"1px solid rgba(184,146,46,.15)"}}/>
-                            <button className="act-btn" style={{marginTop:"6px"}} onClick={()=>{const a=document.createElement("a");a.href=`data:image/png;base64,${b64}`;a.download="gyana_image.png";a.click();}}>⬇ Download</button>
-                          </div>
-                        ))}
-                        {msg.codeResults?.length>0&&msg.codeResults.map((cr,i)=>(
-                          <div key={i} style={{marginTop:"10px",background:"rgba(0,0,0,.3)",borderRadius:"8px",padding:"12px",border:"1px solid rgba(255,255,255,.08)"}}>
-                            <div style={{fontSize:".65rem",color:"var(--t3)",fontFamily:"var(--cap)",letterSpacing:".1em",marginBottom:"6px"}}>CODE OUTPUT</div>
-                            {cr.output&&<pre style={{fontSize:".8rem",color:"var(--ink)",whiteSpace:"pre-wrap",margin:0}}>{cr.output}</pre>}
-                            {cr.error&&<pre style={{fontSize:".8rem",color:"var(--red)",whiteSpace:"pre-wrap",margin:0}}>{cr.error}</pre>}
-                          </div>
-                        ))}
-                        {msg.files?.length>0&&msg.files.map((fd,i)=>(
-                          <div key={i} style={{marginTop:"10px",display:"flex",alignItems:"center",gap:"10px",padding:"10px 14px",background:"rgba(184,146,46,.06)",border:"1px solid rgba(184,146,46,.15)",borderRadius:"8px"}}>
-                            <span>📄</span>
-                            <span style={{fontSize:".8rem",color:"var(--ink)",flex:1}}>{fd.filename}</span>
-                            <button className="act-btn" onClick={()=>downloadFile(fd.filename,fd.content,fd.filetype)}>⬇ Download</button>
-                          </div>
-                        ))}
-                                                {!msg.streaming&&!msg.error&&(
-                          <div className="a-acts">
-                            <button className="act-btn" onClick={()=>copyMsg(msg.id,msg.text)}>
-                              {copied===msg.id?<><CheckSVG/> Copied</>:<><CopySVG/> Copy</>}
-                            </button>
-                            <button className="act-btn" onClick={()=>speakMsg(msg.id,msg.text)}
-                              style={speaking===msg.id?{color:"var(--g2)",background:"rgba(184,146,46,.08)"}:{}}>
-                              {speaking===msg.id?<><StopSVG/> Stop</>:<><SpeakSVG/> Listen</>}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                <div ref={bottomRef}/>
-              </div>
-            )}
-          </div>
-          <div className="inp-wrap">
-            <div className="inp-box">
-              <textarea ref={taRef} value={input} rows={1} placeholder={placeholder}
-                disabled={loading||micOn}
-                onChange={e=>setInput(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
-              />
-              <div className="inp-bar">
-                <div className="inp-tools">
-                  <button className={`tool-btn${micOn?" mic-on":""}`} onClick={micOn?stopMic:startMic}>
-                    {micOn?<span className="rec-row"><span className="rec-dot"/><span className="rec-t">{fmtMic(micSec)}</span></span>:<MicSVG/>}
-                  </button>
-                  <button className="tool-btn" onClick={()=>fileRef.current?.click()}><AttachSVG/></button>
-                  <button className="tool-btn" onClick={()=>setGuruOpen(true)} title="Guru Mode"><ChakraSVG size={13} op=".45"/></button>
-                </div>
-                <button className="send-btn" onClick={()=>send()} disabled={loading||!input.trim()||micOn}>
-                  {loading?<span className="spin"/>:<SendSVG/>}
-                </button>
-              </div>
-            </div>
-            <p className="inp-hint">
-              <span className="hw">say "hey guru"</span> to activate voice
-              &nbsp;·&nbsp;<kbd>Enter</kbd> send&nbsp;·&nbsp;<kbd>Shift+Enter</kbd> new line
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {toast&&<div className={`toast toast-${toast.type}`}>{toast.type==="err"?"✕":toast.type==="info"?"◎":"✓"}&nbsp;{toast.msg}</div>}
-    </>
-  );
-}
-
-
-class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(e) { return { error: e }; }
-  componentDidCatch(e, info) { console.error("App error:", e, info); }
-  render() {
-    if (this.state.error) {
+function renderInline(text) {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
       return (
-        <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-          height:"100dvh",background:"#09100d",color:"#cce0db",fontFamily:"sans-serif",gap:"16px",padding:"20px"}}>
-          <div style={{fontSize:"2rem"}}>⚠️</div>
-          <div style={{fontSize:"1rem",fontWeight:"600"}}>Something went wrong</div>
-          <div style={{fontSize:".8rem",color:"#6b9690",background:"rgba(0,0,0,.3)",padding:"10px 16px",
-            borderRadius:"8px",maxWidth:"400px",textAlign:"center"}}>
-            {this.state.error.message}
-          </div>
-          <button onClick={()=>window.location.reload()}
-            style={{padding:"8px 20px",background:"#1e8a7c",border:"none",borderRadius:"8px",
-              color:"#fff",cursor:"pointer",fontSize:".85rem"}}>
-            Reload
-          </button>
-        </div>
+        <code key={`${part}-${index}`} className="inline-code">
+          {part.slice(1, -1)}
+        </code>
       );
     }
-    return this.props.children;
+    return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
+  });
+}
+
+function MessageContent({ text }) {
+  const blocks = text.split(/```/);
+  return (
+    <div className="message-markdown">
+      {blocks.map((block, index) => {
+        if (index % 2 === 1) {
+          const [maybeLang, ...rest] = block.split("\n");
+          const code = rest.join("\n").trim();
+          const language = maybeLang.trim() || "code";
+          return (
+            <div key={`code-${index}`} className="code-shell">
+              <div className="code-shell-header">{language}</div>
+              <pre>{code}</pre>
+            </div>
+          );
+        }
+
+        return block
+          .split("\n")
+          .filter((line, lineIndex, source) => !(lineIndex === source.length - 1 && !line.trim()))
+          .map((line, lineIndex) => {
+            const key = `line-${index}-${lineIndex}`;
+            if (!line.trim()) {
+              return <div key={key} className="message-gap" />;
+            }
+            if (line.startsWith("### ")) return <h4 key={key}>{line.slice(4)}</h4>;
+            if (line.startsWith("## ")) return <h3 key={key}>{line.slice(3)}</h3>;
+            if (line.startsWith("# ")) return <h2 key={key}>{line.slice(2)}</h2>;
+            return <p key={key}>{renderInline(line)}</p>;
+          });
+      })}
+    </div>
+  );
+}
+
+function LoginScreen() {
+  const [busy, setBusy] = useState(false);
+
+  async function handleSignIn() {
+    if (!firebaseAuth) return;
+    setBusy(true);
+    try {
+      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
+    } finally {
+      setBusy(false);
+    }
   }
+
+  return (
+    <main className="auth-shell">
+      <div className="auth-panel">
+        <div className="badge">Gyana AI Workspace</div>
+        <h1>One AI for docs, chat, code, search, and voice.</h1>
+        <p>
+          Sign in to save your workspace and keep your document intelligence attached
+          to your account.
+        </p>
+        <button className="primary-btn" onClick={handleSignIn} disabled={busy}>
+          {busy ? "Opening Google..." : "Continue with Google"}
+        </button>
+      </div>
+    </main>
+  );
 }
 
 export default function App() {
+  const [initialSessions] = useState(() => loadSessions());
+  const [user, setUser] = useState(hasFirebaseConfig ? undefined : {
+    uid: "guest-workspace",
+    displayName: "Guest",
+    email: "local@workspace",
+  });
+  const [capabilities, setCapabilities] = useState(null);
+  const [documentStats, setDocumentStats] = useState({
+    total_chunks: 0,
+    total_documents: 0,
+    documents: [],
+  });
+  const [uploads, setUploads] = useState([]);
+  const [sessions, setSessions] = useState(initialSessions);
+  const [activeSessionId, setActiveSessionId] = useState(initialSessions[0]?.id || "");
+  const [mode, setMode] = useState("auto");
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("Ready");
+  const [toast, setToast] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+
+  const fileInputRef = useRef(null);
+  const composerRef = useRef(null);
+  const messageEndRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recordingTimerRef = useRef(null);
+  const authBootstrappedRef = useRef(false);
+
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
+    [sessions, activeSessionId]
+  );
+
+  useEffect(() => {
+    saveSessions(sessions);
+  }, [sessions]);
+
+  useEffect(() => {
+    if (!activeSession) return;
+    setMode(activeSession.mode || "auto");
+  }, [activeSession]);
+
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeSession?.messages, uploads]);
+
+  useEffect(() => {
+    fetchCapabilities().then(setCapabilities);
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseAuth) return undefined;
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (nextUser) => {
+      authBootstrappedRef.current = true;
+      setUser(nextUser ?? null);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    refreshDocumentStats(user.uid);
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (toast?.message) {
+      const timer = window.setTimeout(() => setToast(null), 2600);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [toast]);
+
+  async function refreshDocumentStats(userId) {
+    const stats = await fetchDocumentStats(userId);
+    setDocumentStats(stats);
+  }
+
+  function notify(message, type = "info") {
+    setToast({ message, type });
+  }
+
+  function updateSessions(mutator) {
+    setSessions((current) => mutator(current));
+  }
+
+  function updateActiveSession(mutator) {
+    updateSessions((current) =>
+      current.map((session) => {
+        if (session.id !== activeSessionId) return session;
+        const nextSession = mutator(session);
+        return {
+          ...nextSession,
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
+  }
+
+  function pushMessage(message) {
+    updateActiveSession((session) => {
+      const nextMessages = [...session.messages, message];
+      const nextTitle =
+        session.title === "New workspace" && message.role === "user"
+          ? message.text.slice(0, 48) || session.title
+          : session.title;
+
+      return {
+        ...session,
+        title: nextTitle,
+        messages: nextMessages,
+        mode,
+      };
+    });
+  }
+
+  function patchMessage(messageId, patch) {
+    updateActiveSession((session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === messageId ? { ...message, ...patch } : message
+      ),
+      mode,
+    }));
+  }
+
+  function appendMessageText(messageId, chunk) {
+    updateActiveSession((session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === messageId
+          ? { ...message, text: `${message.text}${chunk}` }
+          : message
+      ),
+      mode,
+    }));
+  }
+
+  function appendMessageCollection(messageId, key, item) {
+    updateActiveSession((session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === messageId
+          ? { ...message, [key]: [...(message[key] || []), item] }
+          : message
+      ),
+      mode,
+    }));
+  }
+
+  function handleNewWorkspace() {
+    const session = createSession();
+    session.mode = mode;
+    setSessions((current) => [session, ...current]);
+    setActiveSessionId(session.id);
+    setDraft("");
+    setStatus("Fresh workspace ready");
+  }
+
+  function handleSelectSession(sessionId) {
+    setActiveSessionId(sessionId);
+  }
+
+  function handleDeleteSession(sessionId) {
+    setSessions((current) => {
+      const filtered = current.filter((session) => session.id !== sessionId);
+      if (!filtered.length) {
+        const next = createSession();
+        setActiveSessionId(next.id);
+        return [next];
+      }
+      if (sessionId === activeSessionId) {
+        setActiveSessionId(filtered[0].id);
+      }
+      return filtered;
+    });
+  }
+
+  function handleModeChange(nextMode) {
+    setMode(nextMode);
+    updateActiveSession((session) => ({ ...session, mode: nextMode }));
+  }
+
+  async function handleClearMemory() {
+    if (!user?.uid) return;
+    try {
+      await clearMemory(user.uid);
+      notify("Conversation memory cleared.", "success");
+      setStatus("Memory cleared");
+    } catch (error) {
+      notify(toErrorMessage(error, "Could not clear memory."), "error");
+    }
+  }
+
+  async function handleClearDocuments() {
+    if (!user?.uid) return;
+    try {
+      await clearDocuments(user.uid);
+      setDocumentStats({ total_chunks: 0, total_documents: 0, documents: [] });
+      setUploads([]);
+      notify("Knowledge base reset.", "success");
+      setStatus("Document store cleared");
+    } catch (error) {
+      notify(toErrorMessage(error, "Could not clear documents."), "error");
+    }
+  }
+
+  async function handleFiles(fileList) {
+    if (!user?.uid) return;
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+
+    for (const file of files) {
+      const uploadId = crypto.randomUUID();
+      const nextUpload = {
+        id: uploadId,
+        name: file.name,
+        status: "uploading",
+        progress: 0,
+        size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+      };
+
+      setUploads((current) => [nextUpload, ...current]);
+      setStatus(`Indexing ${file.name}`);
+
+      try {
+        const result = await uploadDocument(file, user.uid, (progress) => {
+          setUploads((current) =>
+            current.map((item) =>
+              item.id === uploadId ? { ...item, progress } : item
+            )
+          );
+        });
+
+        setUploads((current) =>
+          current.map((item) =>
+            item.id === uploadId
+              ? {
+                  ...item,
+                  status: "ready",
+                  progress: 100,
+                  chunks: result.chunks_created,
+                  language: result.detected_language,
+                }
+              : item
+          )
+        );
+        setDocumentStats(result.stats || documentStats);
+        notify(`${file.name} indexed successfully.`, "success");
+      } catch (error) {
+        setUploads((current) =>
+          current.map((item) =>
+            item.id === uploadId ? { ...item, status: "error" } : item
+          )
+        );
+        notify(toErrorMessage(error, `Could not upload ${file.name}.`), "error");
+      }
+    }
+
+    refreshDocumentStats(user.uid);
+    setStatus("Knowledge base updated");
+  }
+
+  async function handleSend(prefilledQuestion) {
+    const question = (prefilledQuestion ?? draft).trim();
+    if (!question || busy || !user?.uid) return;
+
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      text: question,
+      createdAt: new Date().toISOString(),
+    };
+    const assistantId = crypto.randomUUID();
+
+    pushMessage(userMessage);
+    pushMessage({
+      id: assistantId,
+      role: "assistant",
+      text: "",
+      createdAt: new Date().toISOString(),
+      streaming: true,
+      sources: [],
+      images: [],
+      files: [],
+      codeResults: [],
+    });
+
+    setDraft("");
+    setBusy(true);
+    setStatus(`Thinking in ${MODE_META[mode].label} mode`);
+
+    try {
+      await streamAssistant({
+        question,
+        userId: user.uid,
+        mode,
+        onEvent: (event) => {
+          if (event.type === "status") {
+            setStatus(event.value);
+            return;
+          }
+          if (event.type === "text") {
+            appendMessageText(assistantId, event.value);
+            return;
+          }
+          if (event.type === "sources") {
+            patchMessage(assistantId, { sources: event.value || [] });
+            return;
+          }
+          if (event.type === "image" && event.value) {
+            appendMessageCollection(assistantId, "images", event.value);
+            return;
+          }
+          if (event.type === "file" && event.value) {
+            appendMessageCollection(assistantId, "files", event.value);
+            return;
+          }
+          if (event.type === "codeResult" && event.value) {
+            appendMessageCollection(assistantId, "codeResults", event.value);
+            return;
+          }
+          if (event.type === "error") {
+            patchMessage(assistantId, {
+              text: event.value,
+              error: true,
+              streaming: false,
+            });
+            notify(event.value, "error");
+            return;
+          }
+          if (event.type === "done") {
+            patchMessage(assistantId, { streaming: false });
+            setStatus("Response ready");
+          }
+        },
+      });
+    } catch (error) {
+      const fallbackMessage = toErrorMessage(error, "Streaming failed.");
+      try {
+        const data = await askOnce({ question, userId: user.uid, mode });
+        patchMessage(assistantId, {
+          text: data.answer || fallbackMessage,
+          sources: data.sources || [],
+          streaming: false,
+        });
+      } catch {
+        patchMessage(assistantId, {
+          text: fallbackMessage,
+          error: true,
+          streaming: false,
+        });
+        notify(fallbackMessage, "error");
+      }
+    } finally {
+      setBusy(false);
+      composerRef.current?.focus();
+    }
+  }
+
+  async function toggleRecording() {
+    if (!user?.uid) return;
+
+    if (isRecording) {
+      recorderRef.current?.stop();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        window.clearInterval(recordingTimerRef.current);
+        setIsRecording(false);
+        setRecordingTime(0);
+        setStatus("Transcribing voice question");
+
+        try {
+          const blob = new Blob(chunks, { type: mimeType });
+          const data = await transcribeAudio(blob, user.uid);
+          setDraft(data.transcribed_question || "");
+          notify("Voice question transcribed.", "success");
+          await handleSend(data.transcribed_question || "");
+        } catch (error) {
+          notify(toErrorMessage(error, "Could not transcribe audio."), "error");
+          setStatus("Voice input failed");
+        }
+      };
+
+      recorder.start(200);
+      recordingTimerRef.current = window.setInterval(
+        () => setRecordingTime((current) => current + 1),
+        1000
+      );
+      setIsRecording(true);
+      setStatus("Listening...");
+    } catch (error) {
+      notify(toErrorMessage(error, "Microphone access was denied."), "error");
+    }
+  }
+
+  async function handleSignOut() {
+    if (!firebaseAuth) return;
+    await signOut(firebaseAuth);
+  }
+
+  if (firebaseAuth && user === undefined && !authBootstrappedRef.current) {
+    return (
+      <main className="loading-shell">
+        <div className="loading-panel">Loading workspace...</div>
+      </main>
+    );
+  }
+
+  if (firebaseAuth && user === null) {
+    return <LoginScreen />;
+  }
+
+  const messages = activeSession?.messages || [];
+  const readyUploads = uploads.filter((item) => item.status === "ready");
+  const providerSummary = capabilities?.providers || {};
+
   return (
-    <ErrorBoundary>
-      <AppInner />
-    </ErrorBoundary>
+    <div className="workspace-shell">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-kicker">Gyana AI</div>
+          <h1>All-in-one intelligence workspace</h1>
+          <p>
+            A single place for research, retrieval, code-aware answers, voice
+            queries, and project context.
+          </p>
+        </div>
+
+        <button className="primary-btn full-width" onClick={handleNewWorkspace}>
+          New workspace
+        </button>
+
+        <section className="panel">
+          <div className="panel-label">Modes</div>
+          <div className="mode-stack">
+            {Object.entries(MODE_META).map(([key, meta]) => (
+              <button
+                key={key}
+                className={`mode-card ${mode === key ? "active" : ""}`}
+                onClick={() => handleModeChange(key)}
+              >
+                <div>
+                  <strong>{meta.label}</strong>
+                  <span>{meta.tagline}</span>
+                </div>
+                <p>{meta.description}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-label">Knowledge Base</div>
+          <button className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
+            <span>Upload documents, images, or audio</span>
+            <small>{documentStats.total_documents} docs indexed</small>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            hidden
+            multiple
+            accept={ACCEPTED_FILES}
+            onChange={(event) => handleFiles(event.target.files)}
+          />
+          <div className="stat-grid">
+            <div className="stat-card">
+              <span>Documents</span>
+              <strong>{documentStats.total_documents}</strong>
+            </div>
+            <div className="stat-card">
+              <span>Chunks</span>
+              <strong>{documentStats.total_chunks}</strong>
+            </div>
+          </div>
+          <div className="upload-list">
+            {uploads.length === 0 ? (
+              <div className="muted-box">No uploads yet. Start with a PDF, deck, or notes.</div>
+            ) : (
+              uploads.map((upload) => (
+                <div key={upload.id} className={`upload-row ${upload.status}`}>
+                  <div className="upload-pill">{fileLabel(upload.name)}</div>
+                  <div className="upload-copy">
+                    <strong>{upload.name}</strong>
+                    <span>
+                      {upload.size}
+                      {upload.chunks ? ` • ${upload.chunks} chunks` : ""}
+                      {upload.language ? ` • ${upload.language}` : ""}
+                    </span>
+                  </div>
+                  <div className="upload-progress">
+                    {upload.status === "uploading" ? `${upload.progress}%` : upload.status}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="panel-actions">
+            <button className="ghost-btn" onClick={handleClearDocuments}>
+              Clear docs
+            </button>
+            <button className="ghost-btn" onClick={handleClearMemory}>
+              Clear memory
+            </button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-label">Workspaces</div>
+          <div className="session-list">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`session-row ${session.id === activeSessionId ? "active" : ""}`}
+              >
+                <button className="session-main" onClick={() => handleSelectSession(session.id)}>
+                  <strong>{session.title}</strong>
+                  <span>
+                    {formatDate(session.updatedAt)} • {session.messages.length} messages
+                  </span>
+                </button>
+                <button className="session-delete" onClick={() => handleDeleteSession(session.id)}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </aside>
+
+      <main className="main-stage">
+        <header className="topbar">
+          <div>
+            <div className="eyebrow">Powered AI Workspace</div>
+            <h2>{capabilities?.product_name || "Gyana AI Workspace"}</h2>
+          </div>
+          <div className="topbar-right">
+            <div className="provider-strip">
+              <span>{providerSummary.llm || "LLM"}</span>
+              <span>{providerSummary.voice || "Voice"}</span>
+              <span>{providerSummary.vector_store || "Vector store"}</span>
+            </div>
+            <div className="user-chip">
+              <strong>{user?.displayName || "Guest"}</strong>
+              <span>{user?.email || "Local mode"}</span>
+            </div>
+            {firebaseAuth ? (
+              <button className="ghost-btn" onClick={handleSignOut}>
+                Sign out
+              </button>
+            ) : null}
+          </div>
+        </header>
+
+        <section className="hero-grid">
+          <div className="hero-card">
+            <div className="hero-kicker">Status</div>
+            <h3>Build, ask, upload, and explore from one interface.</h3>
+            <p>
+              {MODE_META[mode].description} Right now the workspace is tracking{" "}
+              {documentStats.total_documents} indexed documents and {messages.length} chat messages.
+            </p>
+            <div className="hero-status-row">
+              <div className="signal-pill">
+                <span className="signal-dot" />
+                {status}
+              </div>
+              <div className="signal-pill muted">{readyUploads.length} ready uploads</div>
+            </div>
+          </div>
+
+          <div className="feature-grid">
+            {FEATURE_TILES.map((tile) => (
+              <article key={tile.title} className="feature-card">
+                <h4>{tile.title}</h4>
+                <p>{tile.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="quick-actions">
+          {QUICK_ACTIONS.map((prompt) => (
+            <button key={prompt} className="quick-btn" onClick={() => handleSend(prompt)}>
+              {prompt}
+            </button>
+          ))}
+        </section>
+
+        <section className="conversation-panel">
+          <div className="conversation-feed">
+            {messages.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-copy">
+                  <div className="eyebrow">Start Here</div>
+                  <h3>Turn this into the most powerful AI desk in your project.</h3>
+                  <p>
+                    Ask for research, upload your notes, brainstorm with the model, or
+                    record a voice query. The workspace will adapt to the mode you choose.
+                  </p>
+                </div>
+                <div className="empty-points">
+                  <div className="muted-box">Use `Docs` mode for grounded Q&A over your files.</div>
+                  <div className="muted-box">Use `General` for broad help, search, code, and creation.</div>
+                  <div className="muted-box">Use `Auto` when you want the system to decide.</div>
+                </div>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <article
+                  key={message.id}
+                  className={`message-card ${message.role === "user" ? "user" : "assistant"}`}
+                >
+                  <div className="message-meta">
+                    <span>{message.role === "user" ? "You" : "Gyana"}</span>
+                    <span>{formatTime(message.createdAt)}</span>
+                  </div>
+
+                  <div className={`message-body ${message.error ? "error" : ""}`}>
+                    {message.text ? (
+                      <MessageContent text={message.text} />
+                    ) : message.streaming ? (
+                      <div className="typing-row">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {message.images?.length ? (
+                    <div className="image-grid">
+                      {message.images.map((image, index) => (
+                        <img
+                          key={`${message.id}-image-${index}`}
+                          src={`data:image/png;base64,${image}`}
+                          alt="Generated result"
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {message.codeResults?.length ? (
+                    <div className="tool-result-list">
+                      {message.codeResults.map((result, index) => (
+                        <div key={`${message.id}-code-${index}`} className="tool-result">
+                          <strong>Code Output</strong>
+                          <pre>{result.output || result.error || "No output"}</pre>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {message.files?.length ? (
+                    <div className="tool-result-list">
+                      {message.files.map((file, index) => (
+                        <div key={`${message.id}-file-${index}`} className="tool-result">
+                          <strong>{file.filename}</strong>
+                          <pre>{file.content}</pre>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {message.sources?.length ? (
+                    <div className="source-row">
+                      {message.sources.map((source, index) => (
+                        <span key={`${message.id}-source-${index}`} className="source-chip">
+                          {source.title || source}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))
+            )}
+            <div ref={messageEndRef} />
+          </div>
+
+          <div className="composer-shell">
+            <textarea
+              ref={composerRef}
+              value={draft}
+              rows={1}
+              placeholder="Ask anything, request a workflow, summarize your docs, or search the latest updates..."
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  handleSend();
+                }
+              }}
+              disabled={busy}
+            />
+            <div className="composer-footer">
+              <div className="composer-left">
+                <button className="ghost-btn" onClick={() => fileInputRef.current?.click()}>
+                  Attach files
+                </button>
+                <button
+                  className={`ghost-btn ${isRecording ? "danger" : ""}`}
+                  onClick={toggleRecording}
+                >
+                  {isRecording
+                    ? `Stop (${String(Math.floor(recordingTime / 60)).padStart(2, "0")}:${String(
+                        recordingTime % 60
+                      ).padStart(2, "0")})`
+                    : "Voice"}
+                </button>
+              </div>
+              <button className="primary-btn" onClick={() => handleSend()} disabled={busy || !draft.trim()}>
+                {busy ? "Working..." : "Send"}
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
+    </div>
   );
 }

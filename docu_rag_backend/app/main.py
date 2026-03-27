@@ -1,153 +1,261 @@
 """
-Gyana AI — FastAPI Backend v2
+Gyana AI backend application.
 """
 
-import os, tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from __future__ import annotations
+
+import os
+import tempfile
+from typing import Literal, Optional
+
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
-from typing import Optional
+from fastapi.responses import StreamingResponse
 from groq import Groq
+from pydantic import BaseModel, Field
 
 from app.services.rag_service import (
-    stream_agentic, ask_agentic,
-    stream_general, ask_general,
-    clear_history, get_history,
-    ingest_document, query_documents, delete_documents,
+    ask_agentic,
+    ask_general,
+    clear_history,
+    delete_documents,
+    ingest_document,
+    query_documents,
+    stream_agentic,
+    stream_general,
 )
+from app.services.vector_store import get_stats
+
 
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
-app = FastAPI(title="Gyana AI", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(
+    title="Gyana AI Workspace API",
+    version="3.0.0",
+    description="All-in-one chat, voice, document intelligence, and agentic tooling backend.",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class AskRequest(BaseModel):
-    question: str
-    user_id:  str = "default"
-    context:  Optional[str] = None
+    question: str = Field(..., min_length=1)
+    user_id: str = "default"
+    context: Optional[str] = None
+    mode: Literal["auto", "general", "docs"] = "auto"
+
 
 class ClearRequest(BaseModel):
     user_id: str = "default"
 
-# ── Health ────────────────────────────────────────────────────────────────────
+
+def _user_id_from_request(request: Optional[Request]) -> str:
+    return request.headers.get("x-user-id", "default") if request else "default"
+
+
+async def _resolve_document_context(question: str, user_id: str, mode: str) -> str:
+    if mode == "general":
+        return ""
+    try:
+        return await query_documents(question, user_id)
+    except Exception:
+        return ""
+
+
+def _stream_response(generator):
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
 @app.get("/")
 async def root():
-    return {"status": "Gyana AI running", "version": "2.0.0"}
+    return {
+        "status": "Gyana AI running",
+        "version": "3.0.0",
+        "product": "all-in-one-ai-workspace",
+    }
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-# ── Main agentic stream ───────────────────────────────────────────────────────
+
+@app.get("/capabilities")
+async def capabilities():
+    return {
+        "product_name": "Gyana AI Workspace",
+        "version": "3.0.0",
+        "chat_modes": ["auto", "general", "docs"],
+        "features": [
+            "streaming_chat",
+            "document_rag",
+            "voice_transcription",
+            "web_search_tools",
+            "image_generation",
+            "code_execution",
+            "memory",
+        ],
+        "providers": {
+            "llm": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "voice": "Groq Whisper",
+            "vector_store": "Supabase pgvector",
+        },
+    }
+
+
+@app.get("/documents/stats")
+async def document_stats(request: Request):
+    user_id = _user_id_from_request(request)
+    try:
+        return get_stats(user_id=user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/ask/stream")
 async def ask_stream(req: AskRequest):
-    context_docs = ""
-    try:
-        context_docs = await query_documents(req.question, req.user_id)
-    except: pass
+    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
 
     async def generate():
+        if req.mode == "general":
+            async for chunk in stream_general(req.question, req.user_id):
+                yield chunk
+            return
+
         async for chunk in stream_agentic(req.question, req.user_id, context_docs):
             yield chunk
 
-    return StreamingResponse(generate(), media_type="text/event-stream",
-        headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Access-Control-Allow-Origin":"*"})
+    return _stream_response(generate())
 
-# ── General AI stream (no docs) ───────────────────────────────────────────────
+
 @app.post("/ask-general/stream")
 async def ask_general_stream(req: AskRequest):
     async def generate():
-        async for chunk in stream_agentic(req.question, req.user_id):
+        async for chunk in stream_general(req.question, req.user_id):
             yield chunk
-    return StreamingResponse(generate(), media_type="text/event-stream",
-        headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Access-Control-Allow-Origin":"*"})
 
-# ── Non-streaming ─────────────────────────────────────────────────────────────
+    return _stream_response(generate())
+
+
 @app.post("/ask")
 async def ask(req: AskRequest):
-    context_docs = ""
-    try: context_docs = await query_documents(req.question, req.user_id)
-    except: pass
+    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
+    if req.mode == "general":
+        answer = await ask_general(req.question, req.user_id)
+        return {"answer": answer, "sources": []}
     return await ask_agentic(req.question, req.user_id, context_docs)
+
 
 @app.post("/ask-general")
 async def ask_general_ep(req: AskRequest):
-    return await ask_agentic(req.question, req.user_id)
+    answer = await ask_general(req.question, req.user_id)
+    return {"answer": answer, "sources": []}
 
-# ── Document upload ───────────────────────────────────────────────────────────
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), request: Request = None):
-    user_id  = request.headers.get("x-user-id","default") if request else "default"
+    user_id = _user_id_from_request(request)
     contents = await file.read()
     try:
         result = await ingest_document(contents, file.filename, user_id)
-        return {"message":"Document indexed","filename":file.filename,
-                "chunks_created":result.get("chunks",0),"detected_language":result.get("language","en")}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        stats = get_stats(user_id=user_id)
+        return {
+            "message": "Document indexed",
+            "filename": file.filename,
+            "chunks_created": result.get("chunks", 0),
+            "detected_language": result.get("language", "en"),
+            "stats": stats,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
-# ── Delete documents ──────────────────────────────────────────────────────────
+
 @app.delete("/documents")
 async def delete_docs(request: Request):
-    user_id = request.headers.get("x-user-id","default")
-    try: await delete_documents(user_id)
-    except: pass
-    return {"message":"Documents cleared"}
+    user_id = _user_id_from_request(request)
+    try:
+        await delete_documents(user_id)
+    except Exception:
+        pass
+    return {"message": "Documents cleared", "stats": {"total_chunks": 0, "total_documents": 0, "documents": []}}
 
-# ── Clear memory ──────────────────────────────────────────────────────────────
+
 @app.post("/clear-memory")
 async def clear_mem(req: ClearRequest):
     clear_history(req.user_id)
-    return {"message":"Memory cleared"}
+    return {"message": "Memory cleared"}
 
-# ── Transcribe audio ──────────────────────────────────────────────────────────
+
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), request: Request = None):
+async def transcribe(file: UploadFile = File(...)):
     contents = await file.read()
-    ext      = os.path.splitext(file.filename or "")[1] or ".webm"
+    ext = os.path.splitext(file.filename or "")[1] or ".webm"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(contents); tmp_path = tmp.name
+        tmp.write(contents)
+        tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as af:
-            t = groq_client.audio.transcriptions.create(
+        with open(tmp_path, "rb") as audio_file:
+            transcription = groq_client.audio.transcriptions.create(
                 model="whisper-large-v3",
-                file=(file.filename or f"audio{ext}", af),
+                file=(file.filename or f"audio{ext}", audio_file),
                 response_format="text",
             )
-        text = t if isinstance(t, str) else t.text
+        text = transcription if isinstance(transcription, str) else transcription.text
         return {"text": text, "transcription": text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
-        try: os.unlink(tmp_path)
-        except: pass
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
-# ── Speech query (mic button) ─────────────────────────────────────────────────
+
 @app.post("/speech-query")
 async def speech_query(file: UploadFile = File(...), request: Request = None):
-    user_id  = request.headers.get("x-user-id","default") if request else "default"
+    user_id = _user_id_from_request(request)
     contents = await file.read()
-    ext      = os.path.splitext(file.filename or "")[1] or ".webm"
+    ext = os.path.splitext(file.filename or "")[1] or ".webm"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(contents); tmp_path = tmp.name
+        tmp.write(contents)
+        tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as af:
-            t = groq_client.audio.transcriptions.create(
+        with open(tmp_path, "rb") as audio_file:
+            transcription = groq_client.audio.transcriptions.create(
                 model="whisper-large-v3",
-                file=(file.filename or f"audio{ext}", af),
+                file=(file.filename or f"audio{ext}", audio_file),
                 response_format="text",
             )
-        question = t if isinstance(t, str) else t.text
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        question = transcription if isinstance(transcription, str) else transcription.text
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
-        try: os.unlink(tmp_path)
-        except: pass
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
-    result = await ask_agentic(question, user_id)
-    return {"transcribed_question": question, "answer": result["answer"], "sources": result.get("sources",[])}
+    context_docs = await _resolve_document_context(question, user_id, "auto")
+    result = await ask_agentic(question, user_id, context_docs)
+    return {
+        "transcribed_question": question,
+        "answer": result["answer"],
+        "sources": result.get("sources", []),
+    }
