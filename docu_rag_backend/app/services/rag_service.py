@@ -62,6 +62,41 @@ RULES:
 6. You are Gyana — not just an AI
 Output tool calls as single JSON line only."""
 
+TASK_PROFILES = {
+    "teacher": """
+TEACHING MODE:
+- Teach clearly, progressively, and patiently.
+- Start from intuition, then move to structure.
+- Use examples, analogies, and mini summaries when helpful.
+- If the user sounds like a student, optimize for understanding rather than impressiveness.
+""",
+    "coder": """
+CODING MODE:
+- Think like a strong coding agent.
+- Prefer complete, runnable solutions.
+- When giving code, explain the approach briefly and keep code high quality.
+- For frontend code, ensure the output is preview-friendly when possible.
+""",
+    "mentor": """
+GUIDANCE MODE:
+- Respond like a calm mentor who can also support emotional reflection.
+- Be grounded, compassionate, and practical.
+- Avoid sounding robotic or clinical unless the user asks for that tone.
+""",
+    "document_analyst": """
+DOCUMENT MODE:
+- Ground the answer in the supplied context whenever possible.
+- Summarize clearly, cite the relevant source names when useful, and do not invent content.
+- If the document context is incomplete, say so plainly.
+""",
+    "researcher": """
+RESEARCH MODE:
+- Think critically and synthesize evidence.
+- Distinguish known facts from inferences.
+- When external context is available, prioritize it over generic recall.
+""",
+}
+
 async def search_web(query):
     print(f"[SEARCH] Query: {query}")
 
@@ -201,6 +236,32 @@ def detect_intent(msg):
         "logo","banner","illustration","show me a","visualise"]): return "image"
     return "general"
 
+def detect_task_profile(question, has_docs=False):
+    q = question.lower()
+    if any(word in q for word in ["code", "build", "bug", "debug", "function", "component", "script", "api", "program"]):
+        return "coder"
+    if any(word in q for word in ["teach", "explain", "lesson", "understand", "quiz", "study", "revise", "teacher", "learn"]):
+        return "teacher"
+    if any(word in q for word in ["feel", "anxious", "sad", "confused", "lost", "what should i do", "mentor", "guide", "therap"]):
+        return "mentor"
+    if any(word in q for word in ["research", "compare", "analyze", "analyse", "latest", "current", "news", "search"]):
+        return "researcher"
+    if has_docs:
+        return "document_analyst"
+    return "researcher"
+
+def build_dynamic_system(question, context_docs=""):
+    task_profile = detect_task_profile(question, has_docs=bool(context_docs))
+    task_instructions = TASK_PROFILES.get(task_profile, "")
+    extra = ""
+    if context_docs:
+        extra = (
+            "\n\nDOCUMENT CONTEXT IS AVAILABLE:\n"
+            "Decide whether the answer should rely on the uploaded material, general reasoning, or both. "
+            "If the user is clearly asking about their uploaded files, prioritize the documents."
+        )
+    return SYSTEM + "\n\n" + task_instructions + extra, task_profile
+
 def build_search_context(sr, query):
     is_fallback = sr.get("_is_fallback",False)
     sources = [{"title":r["title"],"url":r["url"]} for r in sr.get("results",[]) if r.get("url")]
@@ -217,7 +278,7 @@ def build_search_context(sr, query):
 
 async def stream_agentic(question, user_id, context_docs=""):
     history = get_history(user_id)
-    system  = SYSTEM
+    system, task_profile = build_dynamic_system(question, context_docs)
     sources = []
 
     if context_docs:
@@ -267,6 +328,12 @@ async def stream_agentic(question, user_id, context_docs=""):
             + "\n\nCRITICAL: Answer in plain text only. "
             "Do NOT output JSON. Do NOT start with {. "
             "Do NOT use tool calls. Answer directly and helpfully.")
+    elif task_profile == "coder":
+        final_system = (
+            system
+            + "\n\nIf code is the best answer, include complete code blocks with language tags."
+            + "\nIf the code is visual frontend code, keep it ready for preview."
+        )
 
     messages = [{"role":"system","content":final_system}]
     messages.extend(history[-12:])
@@ -354,7 +421,7 @@ async def stream_agentic(question, user_id, context_docs=""):
 
 async def ask_agentic(question, user_id, context_docs=""):
     history = get_history(user_id)
-    system  = SYSTEM
+    system, _task_profile = build_dynamic_system(question, context_docs)
     if context_docs: system = system + "\n\nDOCUMENT:\n" + context_docs
     messages = [{"role":"system","content":system}]
     messages.extend(history[-10:])

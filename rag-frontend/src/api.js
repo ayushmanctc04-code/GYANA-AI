@@ -80,6 +80,17 @@ export async function transcribeAudio(blob, userId) {
   return data;
 }
 
+export async function transcribeOnly(blob, userId) {
+  const formData = new FormData();
+  formData.append("file", blob, "voice.webm");
+
+  const { data } = await axios.post(`${API_BASE}/transcribe`, formData, {
+    headers: getHeaders(userId),
+  });
+
+  return data;
+}
+
 export async function askOnce({ question, userId, mode = "auto" }) {
   try {
     const { data } = await axios.post(`${API_BASE}/ask`, {

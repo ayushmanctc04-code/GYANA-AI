@@ -1,6 +1,6 @@
 # =============================================================================
 #  Gyana AI  –  Document Service
-#  Extracts clean text from PDF, DOCX, PPTX, TXT
+#  Extracts clean text from PDF, DOCX, PPTX, TXT, and images
 #  PDF:  PyMuPDF page-by-page (memory efficient for large files)
 #  DOCX: python-docx – paragraphs + headings + tables
 #  PPTX: python-pptx – all shapes + tables + speaker notes
@@ -31,6 +31,11 @@ def extract_text(file_path: str | Path) -> str:
         ".docx": _extract_docx,
         ".pptx": _extract_pptx,
         ".txt":  _extract_txt,
+        ".png":  _extract_image,
+        ".jpg":  _extract_image,
+        ".jpeg": _extract_image,
+        ".webp": _extract_image,
+        ".bmp":  _extract_image,
     }
 
     fn = extractors.get(ext)
@@ -162,6 +167,18 @@ def _extract_txt(path: Path) -> str:
         except (UnicodeDecodeError, LookupError):
             continue
     raise RuntimeError(f"Cannot decode text file: {path.name}")
+
+
+# ---------------------------------------------------------------------------
+# Images / screenshots via OCR
+# ---------------------------------------------------------------------------
+def _extract_image(path: Path) -> str:
+    try:
+        from app.services.ocr_service import extract_text_from_image
+    except ImportError as exc:
+        raise RuntimeError(f"OCR service unavailable: {exc}")
+
+    return extract_text_from_image(path)
 
 
 # ---------------------------------------------------------------------------

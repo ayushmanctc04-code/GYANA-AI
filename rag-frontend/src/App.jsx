@@ -12,56 +12,31 @@ import {
   askOnce,
   clearDocuments,
   clearMemory,
-  fetchCapabilities,
   fetchDocumentStats,
   streamAssistant,
   toErrorMessage,
   transcribeAudio,
+  transcribeOnly,
   uploadDocument,
 } from "./api";
 
 const CHAT_STORAGE_KEY = "gyana.workspace.sessions";
 const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
-
-const QUICK_ACTIONS = [
-  "Summarize my uploaded documents.",
-  "Turn the current context into a study plan.",
-  "Search the latest updates on this topic.",
-  "Generate an image concept for my project.",
-];
-
-const FEATURE_TILES = [
-  {
-    title: "Battle-Tested Research",
-    body: "Ask fast, broad questions or run deeper hunts across live context and long-form reasoning.",
-  },
-  {
-    title: "Survival Archive",
-    body: "Turn notes, PDFs, decks, and raw files into a searchable memory vault for exams and projects.",
-  },
-  {
-    title: "Voice Command",
-    body: "Speak naturally and get instant transcription plus an answer without breaking flow.",
-  },
-];
+const GURU_PROMPT_PREFIX =
+  "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. No markdown unless code is essential.";
 
 const MODE_META = {
-  auto: {
-    label: "Auto",
-    tagline: "Adaptive intelligence",
-    description: "Uses your knowledge vault when needed, then reaches outward for broader reasoning.",
-  },
-  docs: {
-    label: "Docs",
-    tagline: "Archive mode",
-    description: "Prioritizes your uploaded material for grounded study, revision, and project support.",
-  },
-  general: {
-    label: "General",
-    tagline: "Open world mode",
-    description: "Focuses on direct chat, tools, search, and creation without relying on your documents.",
-  },
+  auto: "Auto",
+  docs: "Docs",
+  general: "General",
 };
+
+const SUGGESTIONS = [
+  "Explain this topic like a brilliant teacher.",
+  "Help me think through what I should do next.",
+  "Turn my notes into a revision plan.",
+  "Talk to me like a calm mentor.",
+];
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -79,26 +54,12 @@ const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
 function createSession() {
   return {
     id: crypto.randomUUID(),
-    title: "New workspace",
+    title: "New conversation",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     messages: [],
     mode: "auto",
   };
-}
-
-function formatTime(dateLike) {
-  return new Date(dateLike).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatDate(dateLike) {
-  return new Date(dateLike).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 function loadSessions() {
@@ -113,6 +74,20 @@ function loadSessions() {
 
 function saveSessions(sessions) {
   localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
+}
+
+function formatTime(dateLike) {
+  return new Date(dateLike).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatDate(dateLike) {
+  return new Date(dateLike).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function fileLabel(name) {
@@ -147,14 +122,9 @@ function MessageContent({ text }) {
       {blocks.map((block, index) => {
         if (index % 2 === 1) {
           const [maybeLang, ...rest] = block.split("\n");
-          const code = rest.join("\n").trim();
           const language = maybeLang.trim() || "code";
-          return (
-            <div key={`code-${index}`} className="code-shell">
-              <div className="code-shell-header">{language}</div>
-              <pre>{code}</pre>
-            </div>
-          );
+          const code = rest.join("\n").trim();
+          return <CodeBlock key={`code-${index}`} language={language} code={code} />;
         }
 
         return block
@@ -162,15 +132,66 @@ function MessageContent({ text }) {
           .filter((line, lineIndex, source) => !(lineIndex === source.length - 1 && !line.trim()))
           .map((line, lineIndex) => {
             const key = `line-${index}-${lineIndex}`;
-            if (!line.trim()) {
-              return <div key={key} className="message-gap" />;
-            }
+            if (!line.trim()) return <div key={key} className="message-gap" />;
             if (line.startsWith("### ")) return <h4 key={key}>{line.slice(4)}</h4>;
             if (line.startsWith("## ")) return <h3 key={key}>{line.slice(3)}</h3>;
             if (line.startsWith("# ")) return <h2 key={key}>{line.slice(2)}</h2>;
             return <p key={key}>{renderInline(line)}</p>;
           });
       })}
+    </div>
+  );
+}
+
+function CodeBlock({ language, code }) {
+  const [showPreview, setShowPreview] = useState(false);
+  const isPreviewable = ["html", "css", "javascript", "js", "jsx"].includes(
+    language.toLowerCase()
+  );
+
+  function buildPreview() {
+    const lang = language.toLowerCase();
+    if (lang === "html") return code;
+    if (lang === "css") {
+      return `<style>${code}</style><div style="padding:24px;font-family:sans-serif;background:#fff;color:#111">CSS Preview</div>`;
+    }
+    if (lang === "js" || lang === "javascript") {
+      return `<div style="padding:24px;font-family:sans-serif">JavaScript Preview Console</div><script>${code}</script>`;
+    }
+    if (lang === "jsx") {
+      return `
+        <div id="root"></div>
+        <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+        <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+        <script type="text/babel">${code}</script>
+      `;
+    }
+    return code;
+  }
+
+  return (
+    <div className="code-shell">
+      <div className="code-shell-header-row">
+        <div className="code-shell-header">{language}</div>
+        <div className="code-shell-actions">
+          {isPreviewable ? (
+            <button className="text-button small" onClick={() => setShowPreview((value) => !value)}>
+              {showPreview ? "Hide preview" : "Preview"}
+            </button>
+          ) : null}
+          <button className="text-button small" onClick={() => navigator.clipboard.writeText(code)}>
+            Copy
+          </button>
+        </div>
+      </div>
+      <pre>{code}</pre>
+      {showPreview ? (
+        <div className="code-preview-shell">
+          <div className="code-preview-label">Live preview</div>
+          <iframe title="code preview" className="code-preview-frame" srcDoc={buildPreview()} sandbox="allow-scripts" />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -191,11 +212,10 @@ function LoginScreen() {
   return (
     <main className="auth-shell">
       <div className="auth-panel">
-        <div className="badge">Gyana AI Workspace</div>
-        <h1>The student command center for the next age.</h1>
+        <div className="auth-mark">Gyana</div>
+        <h1>Meet your Guru.</h1>
         <p>
-          Sign in to unlock your archive, your chats, and your personal AI workspace
-          across documents, voice, and live problem-solving.
+          A calm AI companion for study, clarity, conversation, and guidance.
         </p>
         <button className="primary-btn" onClick={handleSignIn} disabled={busy}>
           {busy ? "Opening Google..." : "Continue with Google"}
@@ -205,14 +225,104 @@ function LoginScreen() {
   );
 }
 
+function GuruMode({ isOpen, onClose, onSubmitVoice, busy }) {
+  const [supported, setSupported] = useState(false);
+  const [wakeText, setWakeText] = useState("Say hey guru or tap to speak");
+  const [listeningWake, setListeningWake] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setSupported(false);
+      setWakeText("Tap to speak");
+      return undefined;
+    }
+
+    setSupported(true);
+    const recognition = new Recognition();
+    recognition.lang = "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      setListeningWake(true);
+      setWakeText("Listening for hey guru");
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript || "")
+        .join(" ")
+        .toLowerCase();
+
+      if (transcript.includes("hey guru")) {
+        setWakeText("Guru awakened");
+        recognition.stop();
+        onSubmitVoice?.();
+      }
+    };
+
+    recognition.onend = () => {
+      setListeningWake(false);
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      setWakeText("Tap to speak");
+    }
+
+    return () => {
+      try {
+        recognition.stop();
+      } catch {
+        // ignore
+      }
+    };
+  }, [isOpen, onSubmitVoice]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="guru-overlay">
+      <button className="guru-close" onClick={onClose}>
+        Close
+      </button>
+      <div className="guru-center">
+        <div className="guru-orb-wrap">
+          <div className={`guru-orb ${busy ? "is-busy" : ""}`} onClick={onSubmitVoice}>
+            <div className="guru-orb-core" />
+          </div>
+        </div>
+        <div className="guru-label">Guru Mode</div>
+        <h2>Hey Guru</h2>
+        <p>
+          Speak naturally. Gyana listens like a tutor, thinks like a guide, and
+          answers like someone who is with you.
+        </p>
+        <div className="guru-status">
+          {busy ? "Thinking..." : supported ? wakeText : "Voice wake phrase not supported here"}
+        </div>
+        <button className="guru-action" onClick={onSubmitVoice}>
+          {busy ? "Working..." : listeningWake ? "Speak now" : "Tap to talk"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [initialSessions] = useState(() => loadSessions());
-  const [user, setUser] = useState(hasFirebaseConfig ? undefined : {
-    uid: "guest-workspace",
-    displayName: "Guest",
-    email: "local@workspace",
-  });
-  const [capabilities, setCapabilities] = useState(null);
+  const [user, setUser] = useState(
+    hasFirebaseConfig
+      ? undefined
+      : {
+          uid: "guest-workspace",
+          displayName: "Guest",
+          email: "local@workspace",
+        }
+  );
   const [documentStats, setDocumentStats] = useState({
     total_chunks: 0,
     total_documents: 0,
@@ -228,6 +338,14 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [guruOpen, setGuruOpen] = useState(false);
+  const [speechEnabled, setSpeechEnabled] = useState(true);
+  const [voiceSupport, setVoiceSupport] = useState({
+    input: false,
+    wake: false,
+    output: false,
+  });
+  const [speakingId, setSpeakingId] = useState(null);
 
   const fileInputRef = useRef(null);
   const composerRef = useRef(null);
@@ -235,6 +353,7 @@ export default function App() {
   const recorderRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const authBootstrappedRef = useRef(false);
+  const voicesRef = useRef([]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
@@ -255,10 +374,6 @@ export default function App() {
   }, [activeSession?.messages, uploads]);
 
   useEffect(() => {
-    fetchCapabilities().then(setCapabilities);
-  }, []);
-
-  useEffect(() => {
     if (!firebaseAuth) return undefined;
     const unsubscribe = onAuthStateChanged(firebaseAuth, (nextUser) => {
       authBootstrappedRef.current = true;
@@ -273,11 +388,38 @@ export default function App() {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (toast?.message) {
-      const timer = window.setTimeout(() => setToast(null), 2600);
-      return () => window.clearTimeout(timer);
-    }
-    return undefined;
+    const hasInput =
+      !!navigator.mediaDevices?.getUserMedia &&
+      typeof window.MediaRecorder !== "undefined";
+    const hasWake = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const hasOutput =
+      typeof window.speechSynthesis !== "undefined" &&
+      typeof window.SpeechSynthesisUtterance !== "undefined";
+
+    setVoiceSupport({
+      input: hasInput,
+      wake: hasWake,
+      output: hasOutput,
+    });
+
+    if (!hasOutput) return undefined;
+
+    const loadVoices = () => {
+      voicesRef.current = window.speechSynthesis.getVoices();
+    };
+
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!toast?.message) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
   }, [toast]);
 
   async function refreshDocumentStats(userId) {
@@ -289,6 +431,41 @@ export default function App() {
     setToast({ message, type });
   }
 
+  function pickBestVoice() {
+    const voices = voicesRef.current || [];
+    if (!voices.length) return null;
+
+    const preferred = voices.find((voice) =>
+      /google|samantha|serena|ava|allison|female|zira|aria/i.test(voice.name)
+    );
+    return preferred || voices.find((voice) => /en/i.test(voice.lang)) || voices[0];
+  }
+
+  function speakText(text, messageId = "guru") {
+    if (!speechEnabled || !voiceSupport.output || !text?.trim()) return;
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new window.SpeechSynthesisUtterance(text);
+      const voice = pickBestVoice();
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1.02;
+      utterance.pitch = 1.02;
+      utterance.onstart = () => setSpeakingId(messageId);
+      utterance.onend = () => setSpeakingId(null);
+      utterance.onerror = () => setSpeakingId(null);
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      setSpeakingId(null);
+    }
+  }
+
+  function stopSpeaking() {
+    if (!voiceSupport.output) return;
+    window.speechSynthesis.cancel();
+    setSpeakingId(null);
+  }
+
   function updateSessions(mutator) {
     setSessions((current) => mutator(current));
   }
@@ -297,11 +474,8 @@ export default function App() {
     updateSessions((current) =>
       current.map((session) => {
         if (session.id !== activeSessionId) return session;
-        const nextSession = mutator(session);
-        return {
-          ...nextSession,
-          updatedAt: new Date().toISOString(),
-        };
+        const next = mutator(session);
+        return { ...next, updatedAt: new Date().toISOString() };
       })
     );
   }
@@ -310,10 +484,9 @@ export default function App() {
     updateActiveSession((session) => {
       const nextMessages = [...session.messages, message];
       const nextTitle =
-        session.title === "New workspace" && message.role === "user"
-          ? message.text.slice(0, 48) || session.title
+        session.title === "New conversation" && message.role === "user"
+          ? message.text.slice(0, 54) || session.title
           : session.title;
-
       return {
         ...session,
         title: nextTitle,
@@ -357,61 +530,26 @@ export default function App() {
     }));
   }
 
-  function handleNewWorkspace() {
-    const session = createSession();
-    session.mode = mode;
-    setSessions((current) => [session, ...current]);
-    setActiveSessionId(session.id);
+  function createAssistantMessage() {
+    return {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      text: "",
+      createdAt: new Date().toISOString(),
+      streaming: true,
+      sources: [],
+      images: [],
+      files: [],
+      codeResults: [],
+    };
+  }
+
+  function handleNewConversation() {
+    const next = createSession();
+    next.mode = mode;
+    setSessions((current) => [next, ...current]);
+    setActiveSessionId(next.id);
     setDraft("");
-    setStatus("Fresh workspace ready");
-  }
-
-  function handleSelectSession(sessionId) {
-    setActiveSessionId(sessionId);
-  }
-
-  function handleDeleteSession(sessionId) {
-    setSessions((current) => {
-      const filtered = current.filter((session) => session.id !== sessionId);
-      if (!filtered.length) {
-        const next = createSession();
-        setActiveSessionId(next.id);
-        return [next];
-      }
-      if (sessionId === activeSessionId) {
-        setActiveSessionId(filtered[0].id);
-      }
-      return filtered;
-    });
-  }
-
-  function handleModeChange(nextMode) {
-    setMode(nextMode);
-    updateActiveSession((session) => ({ ...session, mode: nextMode }));
-  }
-
-  async function handleClearMemory() {
-    if (!user?.uid) return;
-    try {
-      await clearMemory(user.uid);
-      notify("Conversation memory cleared.", "success");
-      setStatus("Memory cleared");
-    } catch (error) {
-      notify(toErrorMessage(error, "Could not clear memory."), "error");
-    }
-  }
-
-  async function handleClearDocuments() {
-    if (!user?.uid) return;
-    try {
-      await clearDocuments(user.uid);
-      setDocumentStats({ total_chunks: 0, total_documents: 0, documents: [] });
-      setUploads([]);
-      notify("Knowledge base reset.", "success");
-      setStatus("Document store cleared");
-    } catch (error) {
-      notify(toErrorMessage(error, "Could not clear documents."), "error");
-    }
   }
 
   async function handleFiles(fileList) {
@@ -421,23 +559,21 @@ export default function App() {
 
     for (const file of files) {
       const uploadId = crypto.randomUUID();
-      const nextUpload = {
-        id: uploadId,
-        name: file.name,
-        status: "uploading",
-        progress: 0,
-        size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
-      };
-
-      setUploads((current) => [nextUpload, ...current]);
-      setStatus(`Indexing ${file.name}`);
+      setUploads((current) => [
+        {
+          id: uploadId,
+          name: file.name,
+          status: "uploading",
+          progress: 0,
+          size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+        },
+        ...current,
+      ]);
 
       try {
         const result = await uploadDocument(file, user.uid, (progress) => {
           setUploads((current) =>
-            current.map((item) =>
-              item.id === uploadId ? { ...item, progress } : item
-            )
+            current.map((item) => (item.id === uploadId ? { ...item, progress } : item))
           );
         });
 
@@ -455,24 +591,19 @@ export default function App() {
           )
         );
         setDocumentStats(result.stats || documentStats);
-        notify(`${file.name} indexed successfully.`, "success");
       } catch (error) {
         setUploads((current) =>
-          current.map((item) =>
-            item.id === uploadId ? { ...item, status: "error" } : item
-          )
+          current.map((item) => (item.id === uploadId ? { ...item, status: "error" } : item))
         );
         notify(toErrorMessage(error, `Could not upload ${file.name}.`), "error");
       }
     }
 
     refreshDocumentStats(user.uid);
-    setStatus("Knowledge base updated");
   }
 
-  async function handleSend(prefilledQuestion) {
-    const question = (prefilledQuestion ?? draft).trim();
-    if (!question || busy || !user?.uid) return;
+  async function runStream(question, chosenMode = mode) {
+    if (!question.trim() || busy || !user?.uid) return;
 
     const userMessage = {
       id: crypto.randomUUID(),
@@ -480,57 +611,48 @@ export default function App() {
       text: question,
       createdAt: new Date().toISOString(),
     };
-    const assistantId = crypto.randomUUID();
+    const assistant = createAssistantMessage();
 
     pushMessage(userMessage);
-    pushMessage({
-      id: assistantId,
-      role: "assistant",
-      text: "",
-      createdAt: new Date().toISOString(),
-      streaming: true,
-      sources: [],
-      images: [],
-      files: [],
-      codeResults: [],
-    });
-
-    setDraft("");
+    pushMessage(assistant);
     setBusy(true);
-    setStatus(`Thinking in ${MODE_META[mode].label} mode`);
+    setStatus("Thinking");
+    setDraft("");
+    let collectedText = "";
 
     try {
       await streamAssistant({
         question,
         userId: user.uid,
-        mode,
+        mode: chosenMode,
         onEvent: (event) => {
           if (event.type === "status") {
             setStatus(event.value);
             return;
           }
           if (event.type === "text") {
-            appendMessageText(assistantId, event.value);
+            collectedText += event.value;
+            appendMessageText(assistant.id, event.value);
             return;
           }
           if (event.type === "sources") {
-            patchMessage(assistantId, { sources: event.value || [] });
+            patchMessage(assistant.id, { sources: event.value || [] });
             return;
           }
           if (event.type === "image" && event.value) {
-            appendMessageCollection(assistantId, "images", event.value);
+            appendMessageCollection(assistant.id, "images", event.value);
             return;
           }
           if (event.type === "file" && event.value) {
-            appendMessageCollection(assistantId, "files", event.value);
+            appendMessageCollection(assistant.id, "files", event.value);
             return;
           }
           if (event.type === "codeResult" && event.value) {
-            appendMessageCollection(assistantId, "codeResults", event.value);
+            appendMessageCollection(assistant.id, "codeResults", event.value);
             return;
           }
           if (event.type === "error") {
-            patchMessage(assistantId, {
+            patchMessage(assistant.id, {
               text: event.value,
               error: true,
               streaming: false,
@@ -539,22 +661,32 @@ export default function App() {
             return;
           }
           if (event.type === "done") {
-            patchMessage(assistantId, { streaming: false });
-            setStatus("Response ready");
+            patchMessage(assistant.id, { streaming: false });
+            setStatus("Ready");
+            if (collectedText.trim()) {
+              setTimeout(() => speakText(collectedText, assistant.id), 120);
+            }
           }
         },
       });
     } catch (error) {
       const fallbackMessage = toErrorMessage(error, "Streaming failed.");
       try {
-        const data = await askOnce({ question, userId: user.uid, mode });
-        patchMessage(assistantId, {
+        const data = await askOnce({
+          question,
+          userId: user.uid,
+          mode: chosenMode,
+        });
+        patchMessage(assistant.id, {
           text: data.answer || fallbackMessage,
           sources: data.sources || [],
           streaming: false,
         });
+        if (data.answer) {
+          setTimeout(() => speakText(data.answer, assistant.id), 120);
+        }
       } catch {
-        patchMessage(assistantId, {
+        patchMessage(assistant.id, {
           text: fallbackMessage,
           error: true,
           streaming: false,
@@ -567,11 +699,74 @@ export default function App() {
     }
   }
 
-  async function toggleRecording() {
-    if (!user?.uid) return;
+  async function handleGuruVoice() {
+    if (!user?.uid || busy) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        window.clearInterval(recordingTimerRef.current);
+        setIsRecording(false);
+        setRecordingTime(0);
+
+        try {
+          const blob = new Blob(chunks, { type: mimeType });
+          const transcription = await transcribeOnly(blob, user.uid);
+          const spokenText = transcription.text || transcription.transcription || "";
+          if (!spokenText.trim()) {
+            notify("I could not catch that voice input.", "error");
+            return;
+          }
+          setGuruOpen(false);
+          await runStream(`${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`, "general");
+        } catch (error) {
+          notify(toErrorMessage(error, "Guru mode could not process voice."), "error");
+        }
+      };
+
+      recorder.start(200);
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = window.setInterval(
+        () => setRecordingTime((current) => current + 1),
+        1000
+      );
+      setTimeout(() => {
+        try {
+          if (recorder.state !== "inactive") recorder.stop();
+        } catch {
+          // ignore
+        }
+      }, 7000);
+    } catch (error) {
+      notify(toErrorMessage(error, "Microphone access was denied."), "error");
+    }
+  }
+
+  async function handleStandardVoice() {
+    if (!user?.uid || busy || !voiceSupport.input) {
+      if (!voiceSupport.input) notify("Voice input is not supported in this browser.", "error");
+      return;
+    }
 
     if (isRecording) {
-      recorderRef.current?.stop();
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        // ignore
+      }
       return;
     }
 
@@ -587,32 +782,34 @@ export default function App() {
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
       };
+
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
         window.clearInterval(recordingTimerRef.current);
         setIsRecording(false);
         setRecordingTime(0);
-        setStatus("Transcribing voice question");
 
         try {
           const blob = new Blob(chunks, { type: mimeType });
           const data = await transcribeAudio(blob, user.uid);
-          setDraft(data.transcribed_question || "");
-          notify("Voice question transcribed.", "success");
-          await handleSend(data.transcribed_question || "");
+          const question = data.transcribed_question || "";
+          if (!question.trim()) {
+            notify("I could not catch that voice input.", "error");
+            return;
+          }
+          await runStream(question, mode);
         } catch (error) {
           notify(toErrorMessage(error, "Could not transcribe audio."), "error");
-          setStatus("Voice input failed");
         }
       };
 
       recorder.start(200);
+      setIsRecording(true);
+      setRecordingTime(0);
       recordingTimerRef.current = window.setInterval(
         () => setRecordingTime((current) => current + 1),
         1000
       );
-      setIsRecording(true);
-      setStatus("Listening...");
     } catch (error) {
       notify(toErrorMessage(error, "Microphone access was denied."), "error");
     }
@@ -626,7 +823,7 @@ export default function App() {
   if (firebaseAuth && user === undefined && !authBootstrappedRef.current) {
     return (
       <main className="loading-shell">
-        <div className="loading-panel">Loading workspace...</div>
+        <div className="loading-panel">Awakening Gyana...</div>
       </main>
     );
   }
@@ -636,68 +833,45 @@ export default function App() {
   }
 
   const messages = activeSession?.messages || [];
-  const readyUploads = uploads.filter((item) => item.status === "ready");
-  const providerSummary = capabilities?.providers || {};
 
   return (
-    <div className="workspace-shell">
-      <div className="scene-backdrop" aria-hidden="true">
-        <div className="scene-orb orb-a" />
-        <div className="scene-orb orb-b" />
-        <div className="scene-orb orb-c" />
-        <div className="scene-structure structure-left">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="scene-structure structure-right">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="scene-grid" />
-      </div>
+    <>
+      <GuruMode
+        isOpen={guruOpen}
+        onClose={() => setGuruOpen(false)}
+        onSubmitVoice={handleGuruVoice}
+        busy={busy || isRecording}
+      />
 
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="brand-aura" />
-          <div className="brand-kicker">Gyana AI</div>
-          <h1>Future wisdom for a broken world.</h1>
-          <p>
-            Built for students who need a calm, powerful desk for notes, exams,
-            coding, research, and survival-grade focus.
-          </p>
-          <div className="brand-mantra">Sacred tech • archive mind • field intelligence</div>
-        </div>
+      <div className="app-shell">
+        <aside className="side-rail">
+          <button className="brand-button" onClick={handleNewConversation}>
+            <span className="brand-mark" />
+            <div>
+              <strong>Gyana</strong>
+              <span>your guru</span>
+            </div>
+          </button>
 
-        <button className="primary-btn full-width" onClick={handleNewWorkspace}>
-          New command room
-        </button>
+          <button className="soft-button" onClick={() => setGuruOpen(true)}>
+            Guru Mode
+          </button>
 
-        <section className="panel">
-          <div className="panel-label">Modes</div>
-          <div className="mode-stack">
-            {Object.entries(MODE_META).map(([key, meta]) => (
+          <div className="mode-switch">
+            {Object.entries(MODE_META).map(([key, label]) => (
               <button
                 key={key}
-                className={`mode-card ${mode === key ? "active" : ""}`}
-                onClick={() => handleModeChange(key)}
+                className={`mode-pill ${mode === key ? "active" : ""}`}
+                onClick={() => setMode(key)}
               >
-                <div>
-                  <strong>{meta.label}</strong>
-                  <span>{meta.tagline}</span>
-                </div>
-                <p>{meta.description}</p>
+                {label}
               </button>
             ))}
           </div>
-        </section>
 
-        <section className="panel">
-          <div className="panel-label">Knowledge Base</div>
-          <button className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
-            <span>Feed the archive with notes, images, or recordings</span>
-            <small>{documentStats.total_documents} sources indexed</small>
+          <button className="upload-button" onClick={() => fileInputRef.current?.click()}>
+            <span>Add to knowledge</span>
+            <small>{documentStats.total_documents} documents</small>
           </button>
           <input
             ref={fileInputRef}
@@ -707,265 +881,202 @@ export default function App() {
             accept={ACCEPTED_FILES}
             onChange={(event) => handleFiles(event.target.files)}
           />
-          <div className="stat-grid">
-            <div className="stat-card">
-              <span>Documents</span>
-              <strong>{documentStats.total_documents}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Chunks</span>
-              <strong>{documentStats.total_chunks}</strong>
-            </div>
-          </div>
-          <div className="upload-list">
-            {uploads.length === 0 ? (
-              <div className="muted-box">No archive yet. Start with a PDF, class deck, notebook export, or voice clip.</div>
-            ) : (
-              uploads.map((upload) => (
-                <div key={upload.id} className={`upload-row ${upload.status}`}>
-                  <div className="upload-pill">{fileLabel(upload.name)}</div>
-                  <div className="upload-copy">
-                    <strong>{upload.name}</strong>
-                    <span>
-                      {upload.size}
-                      {upload.chunks ? ` • ${upload.chunks} chunks` : ""}
-                      {upload.language ? ` • ${upload.language}` : ""}
-                    </span>
-                  </div>
-                  <div className="upload-progress">
-                    {upload.status === "uploading" ? `${upload.progress}%` : upload.status}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="panel-actions">
-            <button className="ghost-btn" onClick={handleClearDocuments}>
-              Clear archive
-            </button>
-            <button className="ghost-btn" onClick={handleClearMemory}>
-              Clear memory
-            </button>
-          </div>
-        </section>
 
-        <section className="panel">
-          <div className="panel-label">Workspaces</div>
-          <div className="session-list">
-            {sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`session-row ${session.id === activeSessionId ? "active" : ""}`}
-              >
-                <button className="session-main" onClick={() => handleSelectSession(session.id)}>
-                  <strong>{session.title}</strong>
-                  <span>
-                    {formatDate(session.updatedAt)} • {session.messages.length} signals
-                  </span>
-                </button>
-                <button className="session-delete" onClick={() => handleDeleteSession(session.id)}>
-                  ×
-                </button>
+          <div className="upload-stack">
+            {uploads.slice(0, 4).map((upload) => (
+              <div key={upload.id} className={`upload-item ${upload.status}`}>
+                <span>{fileLabel(upload.name)}</span>
+                <div>
+                  <strong>{upload.name}</strong>
+                  <small>
+                    {upload.status === "uploading" ? `${upload.progress}%` : upload.status}
+                  </small>
+                </div>
               </div>
             ))}
           </div>
-        </section>
-      </aside>
 
-      <main className="main-stage">
-        <header className="topbar">
-          <div>
-            <div className="eyebrow">Post-Apocalyptic Scholar Interface</div>
-            <h2>{capabilities?.product_name || "Gyana AI Workspace"}</h2>
+          <div className="history-list">
+            {sessions.map((session) => (
+              <button
+                key={session.id}
+                className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
+                onClick={() => setActiveSessionId(session.id)}
+              >
+                <strong>{session.title}</strong>
+                <span>{formatDate(session.updatedAt)}</span>
+              </button>
+            ))}
           </div>
-          <div className="topbar-right">
-            <div className="provider-strip">
-              <span>{providerSummary.llm || "LLM"}</span>
-              <span>{providerSummary.voice || "Voice"}</span>
-              <span>{providerSummary.vector_store || "Vector store"}</span>
-            </div>
-            <div className="user-chip">
-              <strong>{user?.displayName || "Guest"}</strong>
-              <span>{user?.email || "Local mode"}</span>
-            </div>
+
+          <div className="side-actions">
+            <button className="text-button" onClick={handleClearDocuments}>
+              Clear docs
+            </button>
+            <button className="text-button" onClick={handleClearMemory}>
+              Clear memory
+            </button>
             {firebaseAuth ? (
-              <button className="ghost-btn" onClick={handleSignOut}>
+              <button className="text-button" onClick={handleSignOut}>
                 Sign out
               </button>
             ) : null}
           </div>
-        </header>
+        </aside>
 
-        <section className="hero-grid">
-          <div className="hero-card hero-card-main">
-            <div className="hero-kicker">Field Status</div>
-            <h3>Study like the network fell and your mind became the last infrastructure.</h3>
-            <p>
-              {MODE_META[mode].description} Right now the workspace is tracking{" "}
-              {documentStats.total_documents} indexed documents and {messages.length} active chat messages.
-            </p>
-            <div className="hero-runes">
-              <span>Exam Ops</span>
-              <span>Project Forge</span>
-              <span>Knowledge Vault</span>
+        <main className="chat-stage">
+          <header className="chat-header">
+            <div>
+              <div className="chat-title">Gyana</div>
+              <p>
+                Tutor when you need clarity. Guide when you feel lost. Companion when
+                you need someone to think with.
+              </p>
             </div>
-            <div className="hero-status-row">
-              <div className="signal-pill">
-                <span className="signal-dot" />
-                {status}
-              </div>
-              <div className="signal-pill muted">{readyUploads.length} archive files ready</div>
+            <div className="header-actions">
+              <button
+                className={`text-button ${speechEnabled ? "active-voice" : ""}`}
+                onClick={() => {
+                  if (speechEnabled) stopSpeaking();
+                  setSpeechEnabled((value) => !value);
+                }}
+              >
+                {speechEnabled ? "Voice on" : "Voice off"}
+              </button>
+              <button className="guru-header-btn" onClick={() => setGuruOpen(true)}>
+                {voiceSupport.wake ? "Say “Hey Guru”" : "Open Guru"}
+              </button>
             </div>
-          </div>
+          </header>
 
-          <div className="feature-grid">
-            {FEATURE_TILES.map((tile) => (
-              <article key={tile.title} className="feature-card">
-                <h4>{tile.title}</h4>
-                <p>{tile.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="quick-actions">
-          {QUICK_ACTIONS.map((prompt) => (
-            <button key={prompt} className="quick-btn" onClick={() => handleSend(prompt)}>
-              {prompt}
-            </button>
-          ))}
-        </section>
-
-        <section className="conversation-panel">
-          <div className="conversation-feed">
+          <section className="conversation-root">
             {messages.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-copy">
-                  <div className="eyebrow">Start Here</div>
-                  <h3>Forge your own future-facing study bunker.</h3>
-                  <p>
-                    Ask for research, upload your notes, break down concepts, or send a
-                    voice command. Gyana adapts itself to the mode you choose.
-                  </p>
+              <div className="welcome-shell">
+                <div className="welcome-orb" onClick={() => setGuruOpen(true)}>
+                  <div className="welcome-orb-core" />
                 </div>
-                <div className="empty-points">
-                  <div className="muted-box">Use `Docs` mode when your own notes, books, and slides should lead the answer.</div>
-                  <div className="muted-box">Use `General` mode for broad thinking, coding, search, and creation.</div>
-                  <div className="muted-box">Use `Auto` mode when you want Gyana to choose the strongest path.</div>
+                <h1>Hey Guru</h1>
+                <p>
+                  Ask anything. Upload your notes. Speak if you want. Keep it simple.
+                </p>
+                <div className="suggestion-row">
+                  {SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      className="suggestion-chip"
+                      onClick={() => runStream(suggestion, mode)}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
                 </div>
               </div>
             ) : (
-              messages.map((message) => (
-                <article
-                  key={message.id}
-                  className={`message-card ${message.role === "user" ? "user" : "assistant"}`}
-                >
-                  <div className="message-meta">
-                    <span>{message.role === "user" ? "You" : "Gyana"}</span>
-                    <span>{formatTime(message.createdAt)}</span>
-                  </div>
-
-                  <div className={`message-body ${message.error ? "error" : ""}`}>
-                    {message.text ? (
-                      <MessageContent text={message.text} />
-                    ) : message.streaming ? (
-                      <div className="typing-row">
-                        <span />
-                        <span />
-                        <span />
+              <div className="message-flow">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`message-turn ${message.role === "user" ? "user" : "assistant"}`}
+                  >
+                    <div className="message-label">
+                      <span>{message.role === "user" ? "You" : "Gyana"}</span>
+                      <span>{formatTime(message.createdAt)}</span>
+                    </div>
+                    <div className={`message-content ${message.error ? "error" : ""}`}>
+                      {message.text ? (
+                        <MessageContent text={message.text} />
+                      ) : message.streaming ? (
+                        <div className="typing-row">
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                      ) : null}
+                    </div>
+                    {message.sources?.length ? (
+                      <div className="source-row">
+                        {message.sources.map((source, index) => (
+                          <span key={`${message.id}-${index}`} className="source-chip">
+                            {source.title || source}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.role === "assistant" && message.text ? (
+                      <div className="message-tools">
+                        <button
+                          className="text-button small"
+                          onClick={() =>
+                            speakingId === message.id
+                              ? stopSpeaking()
+                              : speakText(message.text, message.id)
+                          }
+                        >
+                          {speakingId === message.id ? "Stop voice" : "Listen"}
+                        </button>
+                        <button
+                          className="text-button small"
+                          onClick={() => navigator.clipboard.writeText(message.text)}
+                        >
+                          Copy
+                        </button>
                       </div>
                     ) : null}
                   </div>
-
-                  {message.images?.length ? (
-                    <div className="image-grid">
-                      {message.images.map((image, index) => (
-                        <img
-                          key={`${message.id}-image-${index}`}
-                          src={`data:image/png;base64,${image}`}
-                          alt="Generated result"
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {message.codeResults?.length ? (
-                    <div className="tool-result-list">
-                      {message.codeResults.map((result, index) => (
-                        <div key={`${message.id}-code-${index}`} className="tool-result">
-                          <strong>Code Output</strong>
-                          <pre>{result.output || result.error || "No output"}</pre>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {message.files?.length ? (
-                    <div className="tool-result-list">
-                      {message.files.map((file, index) => (
-                        <div key={`${message.id}-file-${index}`} className="tool-result">
-                          <strong>{file.filename}</strong>
-                          <pre>{file.content}</pre>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {message.sources?.length ? (
-                    <div className="source-row">
-                      {message.sources.map((source, index) => (
-                        <span key={`${message.id}-source-${index}`} className="source-chip">
-                          {source.title || source}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))
+                ))}
+                <div ref={messageEndRef} />
+              </div>
             )}
-            <div ref={messageEndRef} />
-          </div>
+          </section>
 
-          <div className="composer-shell">
-            <textarea
-              ref={composerRef}
-              value={draft}
-              rows={1}
-              placeholder="Ask anything, request a workflow, summarize your docs, or search the latest updates..."
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  handleSend();
-                }
-              }}
-              disabled={busy}
-            />
-            <div className="composer-footer">
-              <div className="composer-left">
-                <button className="ghost-btn" onClick={() => fileInputRef.current?.click()}>
-                  Attach files
+          <footer className="composer-wrap">
+            <div className="composer-shell">
+              <textarea
+                ref={composerRef}
+                value={draft}
+                rows={1}
+                placeholder="Talk to Gyana..."
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    runStream(draft, mode);
+                  }
+                }}
+                disabled={busy}
+              />
+              <div className="composer-actions">
+                <span className="voice-compat">
+                  {voiceSupport.input
+                    ? voiceSupport.wake
+                      ? "Voice ready"
+                      : "Tap voice ready"
+                    : "Voice limited"}
+                </span>
+                <button className="text-button" onClick={() => fileInputRef.current?.click()}>
+                  Attach
                 </button>
-                <button
-                  className={`ghost-btn ${isRecording ? "danger" : ""}`}
-                  onClick={toggleRecording}
-                >
+                <button className="text-button" onClick={handleStandardVoice}>
                   {isRecording
-                    ? `Stop (${String(Math.floor(recordingTime / 60)).padStart(2, "0")}:${String(
+                    ? `Stop ${String(Math.floor(recordingTime / 60)).padStart(2, "0")}:${String(
                         recordingTime % 60
-                      ).padStart(2, "0")})`
+                      ).padStart(2, "0")}`
                     : "Voice"}
                 </button>
+                <button
+                  className="primary-btn send-btn"
+                  onClick={() => runStream(draft, mode)}
+                  disabled={busy || !draft.trim()}
+                >
+                  {busy ? status : "Send"}
+                </button>
               </div>
-              <button className="primary-btn" onClick={() => handleSend()} disabled={busy || !draft.trim()}>
-                {busy ? "Working..." : "Send"}
-              </button>
             </div>
-          </div>
-        </section>
-      </main>
+          </footer>
+        </main>
+      </div>
 
       {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
-    </div>
+    </>
   );
 }
