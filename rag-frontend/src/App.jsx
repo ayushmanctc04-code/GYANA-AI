@@ -354,7 +354,6 @@ function LoginScreen() {
 function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
   const [supported, setSupported] = useState(false);
   const [wakeText, setWakeText] = useState("Say hey guru or tap to speak");
-  const [listeningWake, setListeningWake] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -366,47 +365,9 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
     }
 
     setSupported(true);
-    const recognition = new Recognition();
-    recognition.lang = normalizeLanguageTag(language);
-    recognition.continuous = false;
-    recognition.interimResults = true;
-
-    recognition.onstart = () => {
-      setListeningWake(true);
-      setWakeText("Listening for hey guru");
-    };
-
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript || "")
-        .join(" ")
-        .toLowerCase();
-
-      if (transcript.includes("hey guru")) {
-        setWakeText("Guru awakened");
-        recognition.stop();
-        onSubmitVoice?.();
-      }
-    };
-
-    recognition.onend = () => {
-      setListeningWake(false);
-    };
-
-    try {
-      recognition.start();
-    } catch {
-      setWakeText("Tap to speak");
-    }
-
-    return () => {
-      try {
-        recognition.stop();
-      } catch {
-        // ignore
-      }
-    };
-  }, [isOpen, language, onSubmitVoice]);
+    setWakeText(`Wake phrase ready in ${getLanguageLabel(language)}`);
+    return undefined;
+  }, [isOpen, language]);
 
   if (!isOpen) return null;
 
@@ -431,7 +392,7 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
           {busy ? "Thinking..." : supported ? wakeText : "Voice wake phrase not supported here"}
         </div>
         <button className="guru-action" onClick={onSubmitVoice}>
-          {busy ? "Working..." : listeningWake ? "Speak now" : "Tap to talk"}
+          {busy ? "Working..." : "Tap to talk"}
         </button>
       </div>
     </div>
@@ -482,6 +443,9 @@ function AppInner() {
   const voicesRef = useRef([]);
   const speechQueueRef = useRef([]);
   const speechCancelledRef = useRef(false);
+  const wakeRecognitionRef = useRef(null);
+  const wakeRestartTimerRef = useRef(null);
+  const wakeTriggeredRef = useRef(false);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
@@ -591,6 +555,91 @@ function AppInner() {
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!voiceSupport.wake || !speechEnabled || !user?.uid || isRecording || busy) {
+      try {
+        wakeRecognitionRef.current?.stop();
+      } catch {
+        // ignore
+      }
+      wakeRecognitionRef.current = null;
+      if (wakeRestartTimerRef.current) {
+        window.clearTimeout(wakeRestartTimerRef.current);
+        wakeRestartTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) return undefined;
+
+    const recognition = new Recognition();
+    wakeRecognitionRef.current = recognition;
+    wakeTriggeredRef.current = false;
+    recognition.lang = normalizeLanguageTag(preferredLanguage);
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript || "")
+        .join(" ")
+        .toLowerCase();
+
+      if (/(hey|hi)\s+guru|guru\b/.test(transcript)) {
+        wakeTriggeredRef.current = true;
+        try {
+          recognition.stop();
+        } catch {
+          // ignore
+        }
+        setGuruOpen(true);
+        notify("Guru awakened. Speak now.", "info");
+        window.setTimeout(() => {
+          handleGuruVoice();
+        }, 220);
+      }
+    };
+
+    recognition.onend = () => {
+      const shouldRestart =
+        !wakeTriggeredRef.current && speechEnabled && voiceSupport.wake && !busy && !isRecording;
+      if (shouldRestart) {
+        wakeRestartTimerRef.current = window.setTimeout(() => {
+          try {
+            recognition.start();
+          } catch {
+            // ignore restart failures
+          }
+        }, 350);
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      // ignore browsers that require a fresh gesture
+    }
+
+    return () => {
+      wakeTriggeredRef.current = false;
+      if (wakeRestartTimerRef.current) {
+        window.clearTimeout(wakeRestartTimerRef.current);
+        wakeRestartTimerRef.current = null;
+      }
+      try {
+        recognition.onresult = null;
+        recognition.onend = null;
+        recognition.stop();
+      } catch {
+        // ignore
+      }
+      if (wakeRecognitionRef.current === recognition) {
+        wakeRecognitionRef.current = null;
+      }
+    };
+  }, [busy, isRecording, preferredLanguage, speechEnabled, user?.uid, voiceSupport.wake]);
 
   async function refreshDocumentStats(userId) {
     const stats = await fetchDocumentStats(userId);
@@ -1011,7 +1060,7 @@ function AppInner() {
           setGuruOpen(false);
           await runStream(
             `${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`,
-            "general",
+            "auto",
             { displayQuestion: spokenText, speakResponse: true }
           );
         } catch (error) {
