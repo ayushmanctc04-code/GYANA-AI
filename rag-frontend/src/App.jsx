@@ -312,7 +312,7 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy }) {
   );
 }
 
-export default function App() {
+function AppInner() {
   const [initialSessions] = useState(() => loadSessions());
   const [user, setUser] = useState(
     hasFirebaseConfig
@@ -404,15 +404,30 @@ export default function App() {
 
     if (!hasOutput) return undefined;
 
+    const synth = window.speechSynthesis;
+    if (!synth || typeof synth.getVoices !== "function") return undefined;
+
     const loadVoices = () => {
-      voicesRef.current = window.speechSynthesis.getVoices();
+      try {
+        voicesRef.current = synth.getVoices();
+      } catch {
+        voicesRef.current = [];
+      }
     };
 
     loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
+    try {
+      synth.onvoiceschanged = loadVoices;
+    } catch {
+      // ignore browsers with restricted assignment behavior
+    }
 
     return () => {
-      window.speechSynthesis.onvoiceschanged = null;
+      try {
+        synth.onvoiceschanged = null;
+      } catch {
+        // ignore
+      }
     };
   }, []);
 
@@ -445,8 +460,10 @@ export default function App() {
     if (!speechEnabled || !voiceSupport.output || !text?.trim()) return;
 
     try {
-      window.speechSynthesis.cancel();
-      const utterance = new window.SpeechSynthesisUtterance(text);
+      const synth = window.speechSynthesis;
+      if (!synth || typeof SpeechSynthesisUtterance === "undefined") return;
+      synth.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
       const voice = pickBestVoice();
       if (voice) utterance.voice = voice;
       utterance.rate = 1.02;
@@ -454,7 +471,7 @@ export default function App() {
       utterance.onstart = () => setSpeakingId(messageId);
       utterance.onend = () => setSpeakingId(null);
       utterance.onerror = () => setSpeakingId(null);
-      window.speechSynthesis.speak(utterance);
+      synth.speak(utterance);
     } catch {
       setSpeakingId(null);
     }
@@ -462,8 +479,23 @@ export default function App() {
 
   function stopSpeaking() {
     if (!voiceSupport.output) return;
-    window.speechSynthesis.cancel();
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
     setSpeakingId(null);
+  }
+
+  function copyText(text) {
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text);
+      }
+    } catch {
+      // ignore clipboard failures
+    }
   }
 
   function updateSessions(mutator) {
@@ -1016,7 +1048,7 @@ export default function App() {
                         </button>
                         <button
                           className="text-button small"
-                          onClick={() => navigator.clipboard.writeText(message.text)}
+                          onClick={() => copyText(message.text)}
                         >
                           Copy
                         </button>
@@ -1078,5 +1110,43 @@ export default function App() {
 
       {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
     </>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Gyana UI error:", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="loading-shell">
+          <div className="loading-panel">
+            <div className="auth-mark">Gyana</div>
+            <h1>Something went wrong.</h1>
+            <p>{this.state.error.message}</p>
+          </div>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
