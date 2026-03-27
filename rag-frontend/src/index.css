@@ -505,6 +505,43 @@ textarea {
   z-index: 2;
 }
 
+.sidebar-fab {
+  position: absolute;
+  top: 18px;
+  left: 16px;
+  z-index: 5;
+  border: 1px solid var(--line);
+  background: rgba(9, 14, 18, 0.82);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  transition: all 0.22s ease;
+}
+
+.sidebar-fab:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.sidebar-fab.open {
+  left: 12px;
+}
+
+.top-utility-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-left: 76px;
+  flex-wrap: wrap;
+}
+
 .chat-header {
   display: flex;
   justify-content: flex-end;
@@ -1398,6 +1435,10 @@ textarea {
     padding: 14px;
   }
 
+  .top-utility-bar {
+    padding-left: 64px;
+  }
+
   .side-rail {
     padding: 14px;
   }
@@ -1427,10 +1468,20 @@ textarea {
     width: 100%;
   }
 
-  .voice-compat {
-    width: 100%;
-    margin-right: 0;
-  }
+    .voice-compat {
+      width: 100%;
+      margin-right: 0;
+    }
+
+    .sidebar-fab {
+      top: 14px;
+      left: 14px;
+    }
+
+    .top-utility-bar {
+      padding-left: 58px;
+      align-items: stretch;
+    }
 
   .welcome-shell h1,
   .guru-center h2,

@@ -1457,22 +1457,19 @@ function AppInner() {
         </aside>
 
         <main className="chat-stage">
-          <header className="chat-header">
-            <div>
-              <div className="header-topline">
-                <button
-                  className="sidebar-toggle"
-                  onClick={() => setSidebarOpen((value) => !value)}
-                  aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-                >
-                  {sidebarOpen ? "Panel" : "Menu"}
-                </button>
-              </div>
-              <div className="chat-title">Gyana</div>
-              <p>
-                Tutor when you need clarity. Guide when you feel lost. Companion when
-                you need someone to think with.
-              </p>
+          <button
+            className={`sidebar-fab ${sidebarOpen ? "open" : ""}`}
+            onClick={() => setSidebarOpen((value) => !value)}
+            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          >
+            {sidebarOpen ? "Close" : "Menu"}
+          </button>
+
+          <div className="top-utility-bar">
+            <div className="session-summary">
+              <span>{getFocusLabel(focusPreset)}</span>
+              <span>{getStyleLabel(responseStyle)}</span>
+              <span>{documentStats.total_documents} docs</span>
             </div>
             <div className="header-actions">
               <label className="language-picker">
@@ -1501,12 +1498,6 @@ function AppInner() {
                 {voiceSupport.wake ? "Say “Hey Guru”" : "Open Guru"}
               </button>
             </div>
-          </header>
-
-          <div className={`session-summary ${messages.length ? "compact" : ""}`}>
-            <span>{getFocusLabel(focusPreset)}</span>
-            <span>{getStyleLabel(responseStyle)}</span>
-            <span>{documentStats.total_documents} docs</span>
           </div>
 
           <div className={`chat-layout ${showWorkspacePanel ? "" : "single"}`}>
