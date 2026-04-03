@@ -1457,21 +1457,22 @@ function AppInner() {
         </aside>
 
         <main className="chat-stage">
-          <button
+          <div className="top-toolbar">
+            <button
             className={`sidebar-fab ${sidebarOpen ? "open" : ""}`}
             onClick={() => setSidebarOpen((value) => !value)}
             aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-          >
-            {sidebarOpen ? "Close" : "Menu"}
-          </button>
+            >
+              {sidebarOpen ? "Close" : "Menu"}
+            </button>
 
-          <div className="top-utility-bar">
-            <div className="session-summary">
-              <span>{getFocusLabel(focusPreset)}</span>
-              <span>{getStyleLabel(responseStyle)}</span>
-              <span>{documentStats.total_documents} docs</span>
-            </div>
-            <div className="header-actions">
+            <div className="top-utility-bar">
+              <div className="session-summary">
+                <span>{getFocusLabel(focusPreset)}</span>
+                <span>{getStyleLabel(responseStyle)}</span>
+                <span>{documentStats.total_documents} docs</span>
+              </div>
+              <div className="header-actions">
               <label className="language-picker">
                 <span>Language</span>
                 <select
@@ -1497,6 +1498,7 @@ function AppInner() {
               <button className="guru-header-btn" onClick={() => setGuruOpen(true)}>
                 {voiceSupport.wake ? "Say “Hey Guru”" : "Open Guru"}
               </button>
+              </div>
             </div>
           </div>
 
