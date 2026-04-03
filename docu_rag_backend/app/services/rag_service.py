@@ -676,6 +676,47 @@ async def hf_chat_completion(messages, task_profile="researcher", max_tokens=200
             raise RuntimeError("HF fallback returned an empty response.")
         return text
 
+async def refine_coding_deliverable(question, answer):
+    text = str(answer or "").strip()
+    if not is_direct_build_request(question):
+        return text
+    if "```" in text:
+        return text
+    if not HF_KEY:
+        return text
+
+    repair_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are returning a final coding deliverable."
+                "\nDo not chat."
+                "\nDo not say you will build it."
+                "\nReturn one complete runnable solution right now."
+                "\nFor a responsive webpage request, prefer exactly one full HTML file with embedded CSS and JavaScript."
+                "\nYour response format must be:"
+                "\n1. one short intro line,"
+                "\n2. one complete fenced code block with the correct language tag,"
+                "\n3. one short customization note."
+            ),
+        },
+        {
+            "role": "user",
+            "content": question,
+        },
+    ]
+
+    try:
+        repaired = await hf_chat_completion(
+            repair_messages,
+            task_profile="coder",
+            max_tokens=2600,
+            temperature=0.35,
+        )
+        return repaired.strip() or text
+    except Exception:
+        return text
+
 async def stream_agentic(
     question,
     user_id,
@@ -840,6 +881,7 @@ async def stream_agentic(
                     max_tokens=2200,
                     temperature=0.7,
                 )
+                fallback_text = await refine_coding_deliverable(question, fallback_text)
                 if fallback_text:
                     yield "data: [STATUS]Using backup model...\n\n"
                     yield "data: " + fallback_text + "\n\n"
@@ -912,6 +954,7 @@ async def ask_agentic(
                     max_tokens=2200,
                     temperature=0.7,
                 )
+                answer = await refine_coding_deliverable(question, answer)
                 add_history(user_id,"user",question)
                 add_history(user_id,"assistant",answer)
                 return {

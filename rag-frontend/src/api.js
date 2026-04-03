@@ -131,6 +131,7 @@ export async function streamAssistant({
   responseStyle = "balanced",
   onEvent,
 }) {
+  let sawDone = false;
   const response = await fetch(`${API_BASE}/ask/stream`, {
     method: "POST",
     headers: {
@@ -215,6 +216,7 @@ export async function streamAssistant({
       return;
     }
     if (payload === "[DONE]") {
+      sawDone = true;
       onEvent?.({ type: "done" });
       return;
     }
@@ -235,6 +237,17 @@ export async function streamAssistant({
       const payload = segment.startsWith("data: ") ? segment.slice(6) : segment.slice(5);
       emitData(payload);
     }
+  }
+
+  if (buffer.trim().startsWith("data:")) {
+    const payload = buffer.trim().startsWith("data: ")
+      ? buffer.trim().slice(6)
+      : buffer.trim().slice(5);
+    emitData(payload);
+  }
+
+  if (!sawDone) {
+    onEvent?.({ type: "done" });
   }
 }
 
