@@ -1321,7 +1321,8 @@ function AppInner() {
     .reverse()
     .find((message) => message.role === "assistant" && message.text);
   const latestArtifacts = extractCodeArtifacts(latestAssistantMessage?.text || "");
-  const showWorkspacePanel = messages.length > 0 && latestArtifacts.length > 0;
+  const showWorkspacePanel =
+    responseStyle === "artifact" && messages.length > 0 && latestArtifacts.length > 0;
 
   return (
     <>

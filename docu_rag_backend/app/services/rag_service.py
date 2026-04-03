@@ -154,6 +154,14 @@ STYLE:
 """,
 }
 
+CODING_PRESENTATION_RULES = """
+CODING PRESENTATION OVERRIDE:
+- Unless the user explicitly asks for multiple files, prefer one self-contained deliverable.
+- Do not split simple website, page, or component answers into separate HTML, CSS, and JS blocks by default.
+- Keep the explanation short before the code and concise after the code.
+- In balanced or concise style, avoid oversized code dumps and repeated alternatives.
+""".strip()
+
 LANGUAGE_NAMES = {
     "en": "English",
     "hi": "Hindi",
@@ -471,6 +479,8 @@ def detect_task_profile(question, has_docs=False):
 def build_dynamic_system(question, context_docs=""):
     task_profile = detect_task_profile(question, has_docs=bool(context_docs))
     task_instructions = TASK_PROFILES.get(task_profile, "")
+    if task_profile == "coder":
+        task_instructions = task_instructions.strip() + "\n\n" + CODING_PRESENTATION_RULES
     extra = ""
     if context_docs:
         extra = (
@@ -569,6 +579,8 @@ async def stream_agentic(
             system
             + "\n\nIf code is the best answer, include complete code blocks with language tags."
             + "\nIf the code is visual frontend code, keep it ready for preview."
+            + "\nPrefer one self-contained code block unless the user explicitly asks for separate files."
+            + "\nKeep the explanation brief and practical."
         )
 
     messages = [{"role":"system","content":final_system}]
