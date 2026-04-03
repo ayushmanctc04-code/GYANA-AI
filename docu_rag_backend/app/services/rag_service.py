@@ -462,9 +462,42 @@ def question_targets_documents(question):
 
 def detect_task_profile(question, has_docs=False):
     q = question.lower()
+    coding_keywords = [
+        "code",
+        "build",
+        "make a website",
+        "create a website",
+        "website",
+        "web page",
+        "webpage",
+        "landing page",
+        "portfolio",
+        "ui",
+        "ux",
+        "frontend",
+        "front end",
+        "react",
+        "html",
+        "css",
+        "javascript",
+        "js",
+        "jsx",
+        "tailwind",
+        "app",
+        "component",
+        "script",
+        "api",
+        "program",
+        "responsive",
+        "clone this",
+        "design this page",
+        "food website",
+        "dashboard",
+        "form",
+    ]
     if has_docs and question_targets_documents(question):
         return "document_analyst"
-    if any(word in q for word in ["code", "build", "bug", "debug", "function", "component", "script", "api", "program"]):
+    if any(word in q for word in coding_keywords):
         return "coder"
     if any(word in q for word in ["teach", "explain", "lesson", "understand", "quiz", "study", "revise", "teacher", "learn"]):
         return "teacher"
@@ -677,14 +710,26 @@ async def ask_agentic(
     response_style="balanced",
 ):
     history = get_history(user_id)
-    system, _task_profile = build_dynamic_system(question, context_docs)
+    system, task_profile = build_dynamic_system(question, context_docs)
     language_instruction, response_language = build_language_instruction(
         question, preferred_language, context_docs
     )
     preference_instruction = build_preference_instruction(focus, response_style)
     system = system + "\n\n" + language_instruction + "\n\n" + preference_instruction
-    if context_docs: system = system + "\n\nDOCUMENT:\n" + context_docs
-    messages = [{"role":"system","content":system}]
+    if context_docs:
+        system = system + "\n\nDOCUMENT:\n" + context_docs
+
+    final_system = system
+    if task_profile == "coder":
+        final_system = (
+            system
+            + "\n\nIf code is the best answer, include complete code blocks with language tags."
+            + "\nIf the code is visual frontend code, keep it ready for preview."
+            + "\nPrefer one self-contained code block unless the user explicitly asks for separate files."
+            + "\nKeep the explanation brief and practical."
+        )
+
+    messages = [{"role":"system","content":final_system}]
     messages.extend(history[-10:])
     messages.append({"role":"user","content":question})
     r = groq_client.chat.completions.create(model=MODEL,messages=messages,temperature=0.7,max_tokens=2000)
