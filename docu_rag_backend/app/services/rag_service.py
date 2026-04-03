@@ -162,6 +162,18 @@ CODING PRESENTATION OVERRIDE:
 - In balanced or concise style, avoid oversized code dumps and repeated alternatives.
 """.strip()
 
+CODING_DELIVERABLE_RULES = """
+CODING DELIVERABLE MODE:
+- If the user asks you to build, make, create, code, generate, or write a webpage, website, app, UI, component, form, landing page, dashboard, or responsive layout, treat it as a deliverable request.
+- In a deliverable request, do not answer with a general discussion, concept overview, or "here is how we could structure it" style response.
+- Lead with the final usable solution.
+- For a simple frontend build request, prefer exactly this order:
+  1. one short intro line,
+  2. one complete runnable code block,
+  3. one short note on how to use or customize it.
+- Do not produce multiple alternative drafts unless the user explicitly asks for options.
+""".strip()
+
 LANGUAGE_NAMES = {
     "en": "English",
     "hi": "Hindi",
@@ -509,11 +521,43 @@ def detect_task_profile(question, has_docs=False):
         return "document_analyst"
     return "researcher"
 
+
+def is_direct_build_request(question):
+    q = question.lower()
+    build_phrases = [
+        "build",
+        "make",
+        "create",
+        "code",
+        "generate",
+        "write",
+        "develop",
+    ]
+    targets = [
+        "website",
+        "web page",
+        "webpage",
+        "landing page",
+        "portfolio",
+        "app",
+        "ui",
+        "component",
+        "form",
+        "dashboard",
+        "page",
+        "responsive",
+        "html",
+        "react",
+    ]
+    return any(verb in q for verb in build_phrases) and any(target in q for target in targets)
+
 def build_dynamic_system(question, context_docs=""):
     task_profile = detect_task_profile(question, has_docs=bool(context_docs))
     task_instructions = TASK_PROFILES.get(task_profile, "")
     if task_profile == "coder":
         task_instructions = task_instructions.strip() + "\n\n" + CODING_PRESENTATION_RULES
+        if is_direct_build_request(question):
+            task_instructions += "\n\n" + CODING_DELIVERABLE_RULES
     extra = ""
     if context_docs:
         extra = (
@@ -615,6 +659,12 @@ async def stream_agentic(
             + "\nPrefer one self-contained code block unless the user explicitly asks for separate files."
             + "\nKeep the explanation brief and practical."
         )
+        if is_direct_build_request(question):
+            final_system += (
+                "\n\nThis is a direct build request."
+                "\nReturn a final usable implementation, not a generic explanation."
+                "\nDo not say 'here is how we could structure it'."
+            )
 
     messages = [{"role":"system","content":final_system}]
     messages.extend(history[-12:])
@@ -728,6 +778,12 @@ async def ask_agentic(
             + "\nPrefer one self-contained code block unless the user explicitly asks for separate files."
             + "\nKeep the explanation brief and practical."
         )
+        if is_direct_build_request(question):
+            final_system += (
+                "\n\nThis is a direct build request."
+                "\nReturn a final usable implementation, not a generic explanation."
+                "\nDo not say 'here is how we could structure it'."
+            )
 
     messages = [{"role":"system","content":final_system}]
     messages.extend(history[-10:])
