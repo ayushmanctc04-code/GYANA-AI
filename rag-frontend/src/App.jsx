@@ -7,6 +7,14 @@ import {
   signInWithPopup,
   signOut,
 } from "firebase/auth";
+import {
+  deleteField,
+  doc,
+  getDoc,
+  getFirestore,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 
 import {
   askOnce,
@@ -24,7 +32,10 @@ const CHAT_STORAGE_KEY = "gyana.workspace.sessions";
 const LANGUAGE_STORAGE_KEY = "gyana.workspace.language";
 const FOCUS_STORAGE_KEY = "gyana.workspace.focus";
 const STYLE_STORAGE_KEY = "gyana.workspace.responseStyle";
+const DEVICE_STORAGE_KEY = "gyana.workspace.deviceId";
 const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
+const DEVICE_LOCK_TIMEOUT_MS = 90 * 1000;
+const DEVICE_HEARTBEAT_MS = 30 * 1000;
 const GURU_PROMPT_PREFIX =
   "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
 
@@ -88,6 +99,7 @@ const firebaseConfig = {
 const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
 const firebaseApp = hasFirebaseConfig ? initializeApp(firebaseConfig) : null;
 const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
+const firestoreDb = firebaseApp ? getFirestore(firebaseApp) : null;
 
 function createSession() {
   return {
@@ -133,6 +145,25 @@ function loadStoredValue(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function getOrCreateDeviceId() {
+  try {
+    const existing = localStorage.getItem(DEVICE_STORAGE_KEY);
+    if (existing) return existing;
+    const next = crypto.randomUUID();
+    localStorage.setItem(DEVICE_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+function getDeviceLabel() {
+  if (typeof navigator === "undefined") return "Unknown device";
+  const platform = navigator.platform || "Unknown platform";
+  const mobile = /android|iphone|ipad|mobile/i.test(navigator.userAgent || "");
+  return mobile ? `Phone • ${platform}` : `Laptop/Desktop • ${platform}`;
 }
 
 function normalizeLanguageTag(language) {
@@ -557,6 +588,29 @@ function LoginScreen() {
   );
 }
 
+function DeviceLockScreen({ lockOwner, onRefresh, onSignOut }) {
+  return (
+    <main className="loading-shell">
+      <div className="loading-panel">
+        <div className="auth-mark">Gyana</div>
+        <h1>Gyana is active on another device.</h1>
+        <p>
+          This account can use Gyana on one device at a time.
+          {lockOwner?.label ? ` Current device: ${lockOwner.label}.` : ""}
+        </p>
+        <div className="auth-actions">
+          <button className="primary-btn" onClick={onRefresh}>
+            Check again
+          </button>
+          <button className="text-button" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
   const [supported, setSupported] = useState(false);
   const [wakeText, setWakeText] = useState("Say hey guru or tap to speak");
@@ -647,6 +701,12 @@ function AppInner() {
   });
   const [speakingId, setSpeakingId] = useState(null);
   const [selectedArtifactIndex, setSelectedArtifactIndex] = useState(0);
+  const [remoteReady, setRemoteReady] = useState(!firestoreDb);
+  const [deviceLock, setDeviceLock] = useState({
+    checked: !firestoreDb,
+    allowed: !firestoreDb,
+    owner: null,
+  });
 
   const fileInputRef = useRef(null);
   const composerRef = useRef(null);
@@ -661,6 +721,10 @@ function AppInner() {
   const wakeRestartTimerRef = useRef(null);
   const wakeTriggeredRef = useRef(false);
   const submitLockRef = useRef(false);
+  const heartbeatTimerRef = useRef(null);
+  const loadedRemoteSessionsRef = useRef(false);
+  const deviceIdRef = useRef(getOrCreateDeviceId());
+  const sessionsSaveTimerRef = useRef(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
@@ -668,18 +732,217 @@ function AppInner() {
   );
 
   const storageUserId = user?.uid || "guest-workspace";
+  const sessionDocRef = firestoreDb && user?.uid ? doc(firestoreDb, "gyana_sessions", user.uid) : null;
+  const deviceLabel = getDeviceLabel();
 
   useEffect(() => {
     if (firebaseAuth && user === undefined && !authBootstrappedRef.current) return;
+    if (firestoreDb && user?.uid) {
+      if (!remoteReady || loadedRemoteSessionsRef.current) return;
+    }
     const loaded = loadSessions(storageUserId);
     setSessions(loaded);
-    setActiveSessionId((current) => current || loaded[0]?.id || "");
-  }, [storageUserId, user]);
+    setActiveSessionId((current) =>
+      loaded.some((session) => session.id === current) ? current : loaded[0]?.id || ""
+    );
+  }, [remoteReady, storageUserId, user]);
 
   useEffect(() => {
     if (firebaseAuth && user === undefined && !authBootstrappedRef.current) return;
+    if (firestoreDb && user?.uid) return;
     saveSessions(sessions, storageUserId);
   }, [sessions, storageUserId, user]);
+
+  async function releaseDeviceLock() {
+    if (!sessionDocRef || !user?.uid) return;
+    try {
+      await updateDoc(sessionDocRef, {
+        deviceLock: deleteField(),
+      });
+    } catch {
+      // ignore lock release failures
+    }
+  }
+
+  async function acquireDeviceLock() {
+    if (!sessionDocRef || !user?.uid) {
+      setDeviceLock({ checked: true, allowed: true, owner: null });
+      setRemoteReady(true);
+      return true;
+    }
+
+    try {
+      const snap = await getDoc(sessionDocRef);
+      const payload = snap.exists() ? snap.data() : {};
+      const currentLock = payload?.deviceLock || null;
+      const now = Date.now();
+      const isActiveElsewhere =
+        currentLock &&
+        currentLock.deviceId &&
+        currentLock.deviceId !== deviceIdRef.current &&
+        now - Number(currentLock.lastSeen || 0) < DEVICE_LOCK_TIMEOUT_MS;
+
+      if (isActiveElsewhere) {
+        setDeviceLock({
+          checked: true,
+          allowed: false,
+          owner: {
+            label: currentLock.label || "Another device",
+            lastSeen: currentLock.lastSeen || 0,
+          },
+        });
+        setRemoteReady(false);
+        return false;
+      }
+
+      const nextLock = {
+        deviceId: deviceIdRef.current,
+        label: deviceLabel,
+        lastSeen: now,
+      };
+
+      await setDoc(
+        sessionDocRef,
+        {
+          deviceLock: nextLock,
+        },
+        { merge: true }
+      );
+
+      setDeviceLock({ checked: true, allowed: true, owner: null });
+      setRemoteReady(false);
+      return true;
+    } catch {
+      setDeviceLock({ checked: true, allowed: true, owner: null });
+      setRemoteReady(true);
+      return true;
+    }
+  }
+
+  useEffect(() => {
+    loadedRemoteSessionsRef.current = false;
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!sessionDocRef || !user?.uid) {
+      setRemoteReady(true);
+      setDeviceLock({ checked: true, allowed: true, owner: null });
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const boot = async () => {
+      const allowed = await acquireDeviceLock();
+      if (!allowed || cancelled) return;
+
+      try {
+        const snap = await getDoc(sessionDocRef);
+        const payload = snap.exists() ? snap.data() : {};
+        const remoteSessions = Array.isArray(payload?.sessions) && payload.sessions.length
+          ? payload.sessions
+          : [createSession()];
+
+        if (!cancelled) {
+          loadedRemoteSessionsRef.current = true;
+          setSessions(remoteSessions);
+          setActiveSessionId((current) =>
+            remoteSessions.some((session) => session.id === current)
+              ? current
+              : remoteSessions[0]?.id || ""
+          );
+          setRemoteReady(true);
+        }
+      } catch {
+        if (!cancelled) {
+          loadedRemoteSessionsRef.current = true;
+          setRemoteReady(true);
+        }
+      }
+    };
+
+    boot();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionDocRef, user?.uid]);
+
+  useEffect(() => {
+    if (!sessionDocRef || !user?.uid || !remoteReady || !deviceLock.allowed || !loadedRemoteSessionsRef.current) {
+      return undefined;
+    }
+
+    if (sessionsSaveTimerRef.current) {
+      window.clearTimeout(sessionsSaveTimerRef.current);
+    }
+
+    sessionsSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        await setDoc(
+          sessionDocRef,
+          {
+            sessions,
+            updatedAt: Date.now(),
+            deviceLock: {
+              deviceId: deviceIdRef.current,
+              label: deviceLabel,
+              lastSeen: Date.now(),
+            },
+          },
+          { merge: true }
+        );
+      } catch {
+        // ignore remote persistence errors and keep local state usable
+      }
+    }, 350);
+
+    return () => {
+      if (sessionsSaveTimerRef.current) {
+        window.clearTimeout(sessionsSaveTimerRef.current);
+        sessionsSaveTimerRef.current = null;
+      }
+    };
+  }, [deviceLabel, deviceLock.allowed, remoteReady, sessionDocRef, sessions, user?.uid]);
+
+  useEffect(() => {
+    if (!sessionDocRef || !user?.uid || !deviceLock.allowed) return undefined;
+
+    const beat = async () => {
+      try {
+        await setDoc(
+          sessionDocRef,
+          {
+            deviceLock: {
+              deviceId: deviceIdRef.current,
+              label: deviceLabel,
+              lastSeen: Date.now(),
+            },
+          },
+          { merge: true }
+        );
+      } catch {
+        // ignore heartbeat failures
+      }
+    };
+
+    beat();
+    heartbeatTimerRef.current = window.setInterval(beat, DEVICE_HEARTBEAT_MS);
+
+    const handleBeforeUnload = () => {
+      releaseDeviceLock();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      if (heartbeatTimerRef.current) {
+        window.clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+      }
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [deviceLabel, deviceLock.allowed, sessionDocRef, user?.uid]);
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, preferredLanguage);
@@ -1499,6 +1762,7 @@ function AppInner() {
   }
 
   async function handleSignOut() {
+    await releaseDeviceLock();
     if (!firebaseAuth) return;
     await signOut(firebaseAuth);
   }
@@ -1513,6 +1777,32 @@ function AppInner() {
 
   if (firebaseAuth && user === null) {
     return <LoginScreen />;
+  }
+
+  if (firebaseAuth && user?.uid && !deviceLock.checked) {
+    return (
+      <main className="loading-shell">
+        <div className="loading-panel">Checking device access...</div>
+      </main>
+    );
+  }
+
+  if (firebaseAuth && user?.uid && deviceLock.checked && !deviceLock.allowed) {
+    return (
+      <DeviceLockScreen
+        lockOwner={deviceLock.owner}
+        onRefresh={acquireDeviceLock}
+        onSignOut={handleSignOut}
+      />
+    );
+  }
+
+  if (firebaseAuth && user?.uid && !remoteReady) {
+    return (
+      <main className="loading-shell">
+        <div className="loading-panel">Restoring your workspace...</div>
+      </main>
+    );
   }
 
   const messages = activeSession?.messages || [];

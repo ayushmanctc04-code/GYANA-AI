@@ -1414,6 +1414,14 @@ textarea {
   letter-spacing: -0.01em;
 }
 
+.auth-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+}
+
 @keyframes bounce {
   0%,
   80%,
