@@ -942,6 +942,7 @@ async def ask_agentic(
     try:
         r = groq_create_with_fallback(messages=messages,temperature=0.7,max_tokens=2000)
         answer = r.choices[0].message.content.strip()
+        answer = await refine_coding_deliverable(question, answer)
         add_history(user_id,"user",question)
         add_history(user_id,"assistant",answer)
         return {"answer":answer,"sources":[],"language":response_language}

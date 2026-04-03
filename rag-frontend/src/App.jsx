@@ -299,6 +299,28 @@ function fileLabel(name) {
   return "FILE";
 }
 
+function isDirectBuildPrompt(text) {
+  const q = String(text || "").toLowerCase();
+  const buildPhrases = ["build", "make", "create", "code", "generate", "write", "develop"];
+  const targets = [
+    "website",
+    "web page",
+    "webpage",
+    "landing page",
+    "portfolio",
+    "app",
+    "ui",
+    "component",
+    "form",
+    "dashboard",
+    "page",
+    "responsive",
+    "html",
+    "react",
+  ];
+  return buildPhrases.some((verb) => q.includes(verb)) && targets.some((target) => q.includes(target));
+}
+
 function renderInline(text) {
   const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
   return tokens.filter(Boolean).map((part, index) => {
@@ -623,6 +645,7 @@ function AppInner() {
   const wakeRecognitionRef = useRef(null);
   const wakeRestartTimerRef = useRef(null);
   const wakeTriggeredRef = useRef(false);
+  const submitLockRef = useRef(false);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
@@ -1256,9 +1279,11 @@ function AppInner() {
   }
 
   async function runStream(question, chosenMode = mode, options = {}) {
-    if (!question.trim() || busy || !user?.uid) return;
+    if (!question.trim() || busy || submitLockRef.current || !user?.uid) return;
+    submitLockRef.current = true;
     const visibleQuestion = options.displayQuestion?.trim() || question;
     const shouldSpeak = !!options.speakResponse;
+    const preferFinalAnswer = isDirectBuildPrompt(question);
 
     const userMessage = {
       id: crypto.randomUUID(),
@@ -1277,6 +1302,30 @@ function AppInner() {
     let responseLanguage = preferredLanguage;
 
     try {
+      if (preferFinalAnswer) {
+        const data = await askOnce({
+          question,
+          userId: user.uid,
+          mode: chosenMode,
+          language: preferredLanguage,
+          focus: focusPreset,
+          responseStyle,
+        });
+        const finalText = data.answer || "Gyana could not generate a final build response.";
+        patchMessage(assistant.id, {
+          text: finalText,
+          sources: data.sources || [],
+          streaming: false,
+          language: data.language || responseLanguage,
+          error: !!data.error,
+        });
+        setStatus("Ready");
+        if (shouldSpeak && finalText.trim()) {
+          setTimeout(() => speakText(finalText, assistant.id, data.language || responseLanguage), 120);
+        }
+        return;
+      }
+
       await streamAssistant({
         question,
         userId: user.uid,
@@ -1363,6 +1412,7 @@ function AppInner() {
       }
     } finally {
       setBusy(false);
+      submitLockRef.current = false;
       composerRef.current?.focus();
     }
   }
