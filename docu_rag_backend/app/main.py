@@ -111,6 +111,7 @@ async def capabilities():
         ],
         "providers": {
             "llm": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "llm_backup": os.environ.get("HF_CHAT_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
             "voice": speech_provider_status(),
             "vector_store": "Supabase pgvector",
         },

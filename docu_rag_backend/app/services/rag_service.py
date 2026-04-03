@@ -17,6 +17,8 @@ FALLBACK_MODELS = [
     for model in os.environ.get("GROQ_FALLBACK_MODELS", "").split(",")
     if model.strip()
 ]
+HF_CHAT_MODEL = os.environ.get("HF_CHAT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+HF_CODER_MODEL = os.environ.get("HF_CODER_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
 
 _memory = defaultdict(lambda: deque(maxlen=30))
 def get_history(uid): return list(_memory[uid])
@@ -602,7 +604,7 @@ def is_rate_limit_error(exc):
 
 def friendly_model_error(exc):
     if is_rate_limit_error(exc):
-        return "Gyana is temporarily overloaded right now. Please try again in a few minutes."
+        return "Gyana is temporarily overloaded right now. Switching to backup intelligence if available."
     return "Gyana hit a temporary backend issue. Please try again."
 
 def groq_create_with_fallback(**kwargs):
@@ -623,6 +625,56 @@ def groq_create_with_fallback(**kwargs):
     if last_error:
         raise last_error
     raise RuntimeError("No Groq model is configured.")
+
+def choose_hf_model(task_profile):
+    return HF_CODER_MODEL if task_profile == "coder" else HF_CHAT_MODEL
+
+def extract_hf_text(payload):
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        if isinstance(content, list):
+            text_parts = [
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            return "".join(text_parts).strip()
+        return str(content).strip()
+    generated = payload.get("generated_text")
+    if generated:
+        return str(generated).strip()
+    return ""
+
+async def hf_chat_completion(messages, task_profile="researcher", max_tokens=2000, temperature=0.7):
+    if not HF_KEY:
+        raise RuntimeError("HF fallback is not configured.")
+
+    payload = {
+        "model": choose_hf_model(task_profile),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    headers = {
+        "Authorization": f"Bearer {HF_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        text = extract_hf_text(response.json())
+        if not text:
+            raise RuntimeError("HF fallback returned an empty response.")
+        return text
 
 async def stream_agentic(
     question,
@@ -780,6 +832,26 @@ async def stream_agentic(
             yield "data: " + hold_buf + "\n\n"
 
     except Exception as e:
+        if is_rate_limit_error(e) and HF_KEY:
+            try:
+                fallback_text = await hf_chat_completion(
+                    messages,
+                    task_profile=task_profile,
+                    max_tokens=2200,
+                    temperature=0.7,
+                )
+                if fallback_text:
+                    yield "data: [STATUS]Using backup model...\n\n"
+                    yield "data: " + fallback_text + "\n\n"
+                    if sources:
+                        yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
+                    add_history(user_id, "user", question)
+                    add_history(user_id, "assistant", fallback_text[:1500])
+                    yield "data: [DONE]\n\n"
+                    return
+            except Exception:
+                pass
+
         yield "data: [ERROR]" + friendly_model_error(e) + "\n\n"; return
 
     if sources: yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
@@ -832,6 +904,24 @@ async def ask_agentic(
         add_history(user_id,"assistant",answer)
         return {"answer":answer,"sources":[],"language":response_language}
     except Exception as exc:
+        if is_rate_limit_error(exc) and HF_KEY:
+            try:
+                answer = await hf_chat_completion(
+                    messages,
+                    task_profile=task_profile,
+                    max_tokens=2200,
+                    temperature=0.7,
+                )
+                add_history(user_id,"user",question)
+                add_history(user_id,"assistant",answer)
+                return {
+                    "answer": answer,
+                    "sources": [],
+                    "language": response_language,
+                    "provider": "huggingface",
+                }
+            except Exception:
+                pass
         return {
             "answer": friendly_model_error(exc),
             "sources": [],
