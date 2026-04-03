@@ -42,6 +42,7 @@ class Chunk:
 
 
 SECTION_MARKER_RE = re.compile(r"^\[(Page\s+\d+|Slide\s+\d+|Notes)\]\s*$", re.IGNORECASE)
+HEADING_RE = re.compile(r"^(#{1,6}\s+.+|[A-Z][A-Z0-9\s:&/\-]{5,})$")
 
 
 # ---------------------------------------------------------------------------
@@ -181,40 +182,81 @@ def _chunk_text(text: str, source: str) -> list[Chunk]:
     words_per_chunk = max(50, CHUNK_SIZE // 5)
     overlap_words   = max(10, CHUNK_OVERLAP // 5)
 
-    sections: list[tuple[str, str]] = []
+    sections: list[tuple[str, list[str]]] = []
     current_label = ""
-    current_lines: list[str] = []
+    current_paragraphs: list[str] = []
+    paragraph_buffer: list[str] = []
+
+    def flush_paragraph():
+        nonlocal paragraph_buffer, current_paragraphs
+        if paragraph_buffer:
+            paragraph = " ".join(paragraph_buffer).strip()
+            if paragraph:
+                current_paragraphs.append(paragraph)
+            paragraph_buffer = []
+
+    def flush_section():
+        nonlocal current_paragraphs
+        flush_paragraph()
+        if current_paragraphs:
+            sections.append((current_label, current_paragraphs))
+            current_paragraphs = []
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
         marker = SECTION_MARKER_RE.match(line)
         if marker:
-            if current_lines:
-                sections.append((current_label, " ".join(current_lines).strip()))
-                current_lines = []
+            flush_section()
             current_label = marker.group(1)
             continue
-        if line:
-            current_lines.append(line)
+        if not line:
+            flush_paragraph()
+            continue
+        if HEADING_RE.match(line):
+            flush_paragraph()
+            current_paragraphs.append(line)
+            continue
+        paragraph_buffer.append(line)
 
-    if current_lines:
-        sections.append((current_label, " ".join(current_lines).strip()))
+    flush_section()
 
     if not sections:
-        sections = [("", text)]
+        sections = [("", [text])]
 
-    for label, section_text in sections:
-        words = section_text.split()
-        i = 0
-        while i < len(words):
-            chunk_words = words[i:i + words_per_chunk]
-            chunk_text = " ".join(chunk_words).strip()
+    for label, paragraphs in sections:
+        chunk_parts: list[str] = []
+        chunk_word_count = 0
+
+        for paragraph in paragraphs:
+            para_words = paragraph.split()
+            para_word_count = len(para_words)
+            if chunk_parts and chunk_word_count + para_word_count > words_per_chunk:
+                chunk_text = "\n\n".join(chunk_parts).strip()
+                if chunk_text:
+                    if label:
+                        chunk_text = f"[{label}]\n{chunk_text}"
+                    chunks.append(Chunk(text=chunk_text, source=source, index=idx))
+                    idx += 1
+
+                overlap_text = ""
+                if overlap_words > 0 and chunk_parts:
+                    overlap_candidates = " ".join(chunk_parts).split()
+                    overlap_slice = overlap_candidates[-overlap_words:]
+                    overlap_text = " ".join(overlap_slice).strip()
+
+                chunk_parts = [overlap_text] if overlap_text else []
+                chunk_word_count = len(overlap_text.split()) if overlap_text else 0
+
+            chunk_parts.append(paragraph)
+            chunk_word_count += para_word_count
+
+        if chunk_parts:
+            chunk_text = "\n\n".join([part for part in chunk_parts if part.strip()]).strip()
             if chunk_text:
                 if label:
                     chunk_text = f"[{label}]\n{chunk_text}"
                 chunks.append(Chunk(text=chunk_text, source=source, index=idx))
                 idx += 1
-            i += max(1, words_per_chunk - overlap_words)
 
     log.info("Chunked into %d chunks", len(chunks))
     return chunks

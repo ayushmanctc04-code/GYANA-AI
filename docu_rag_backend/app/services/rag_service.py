@@ -668,6 +668,16 @@ def extract_doc_sources(context_docs):
         sources.append({"title": label, "url": ""})
     return sources
 
+def extract_requested_section_ref(question):
+    q = question or ""
+    match = re.search(r"\bpage\s+(\d+)\b", q, flags=re.IGNORECASE)
+    if match:
+        return f"Page {match.group(1)}"
+    match = re.search(r"\bslide\s+(\d+)\b", q, flags=re.IGNORECASE)
+    if match:
+        return f"Slide {match.group(1)}"
+    return ""
+
 def lexical_overlap_score(question, text):
     q_tokens = set(re.findall(r"[a-z0-9]{3,}", (question or "").lower()))
     t_tokens = set(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
@@ -678,6 +688,49 @@ def lexical_overlap_score(question, text):
 def extract_section_ref(text):
     match = re.search(r"^\[(Page\s+\d+|Slide\s+\d+|Notes)\]", text or "", flags=re.IGNORECASE | re.MULTILINE)
     return match.group(1) if match else ""
+
+def detect_document_request_mode(question):
+    q = (question or "").lower()
+    if any(phrase in q for phrase in ["solve", "answer", "question", "assignment", "worksheet"]):
+        return "solve"
+    if any(phrase in q for phrase in ["summarize", "summary", "overview", "gist"]):
+        return "summarize"
+    if any(phrase in q for phrase in ["compare", "difference", "vs", "versus"]):
+        return "compare"
+    if any(phrase in q for phrase in ["explain", "teach", "understand"]):
+        return "explain"
+    return "general"
+
+def build_document_grounding_instruction(question, context_docs=""):
+    mode = detect_document_request_mode(question)
+    refs = [source.get("title", "") for source in extract_doc_sources(context_docs)[:4]]
+    refs_line = ", ".join(refs) if refs else "the uploaded file"
+    instruction = [
+        "DOCUMENT GROUNDING:",
+        "- Base the answer on the uploaded material first.",
+        f"- Use available source references naturally, for example ({refs_line}) when helpful.",
+        "- If the file does not fully support a claim, say that plainly instead of inventing details.",
+    ]
+    if mode == "solve":
+        instruction.extend([
+            "- The user wants a direct solved answer from the file.",
+            "- Answer the task first, then explain briefly using the document.",
+        ])
+    elif mode == "summarize":
+        instruction.extend([
+            "- Give a clean summary with the key ideas first.",
+            "- Keep the summary grounded in the uploaded material.",
+        ])
+    elif mode == "compare":
+        instruction.extend([
+            "- Compare only what the uploaded material supports.",
+            "- Use a clean side-by-side or point-by-point structure when helpful.",
+        ])
+    elif mode == "explain":
+        instruction.extend([
+            "- Explain the topic as if you have just read the file and are teaching it clearly.",
+        ])
+    return "\n".join(instruction)
 
 def build_search_context(sr, query):
     is_fallback = sr.get("_is_fallback",False)
@@ -835,7 +888,8 @@ async def stream_agentic(
 
     if context_docs:
         sources.extend(extract_doc_sources(context_docs))
-        system = (system + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs
+        system = (system + "\n\n" + build_document_grounding_instruction(question, context_docs)
+                  + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs
                   + "\n\nAnswer using this document. No JSON. No tools. Answer directly.")
 
     intent = detect_intent(question)
@@ -1018,7 +1072,7 @@ async def ask_agentic(
     preference_instruction = build_preference_instruction(focus, response_style)
     system = system + "\n\n" + language_instruction + "\n\n" + preference_instruction
     if context_docs:
-        system = system + "\n\nDOCUMENT:\n" + context_docs
+        system = system + "\n\n" + build_document_grounding_instruction(question, context_docs) + "\n\nDOCUMENT:\n" + context_docs
 
     final_system = system
     if task_profile == "coder":
@@ -1141,12 +1195,14 @@ async def query_documents(question, user_id):
     try:
         results = search_documents(question, top_k=7, user_id=user_id)
         if not results: return ""
+        requested_ref = extract_requested_section_ref(question)
 
         reranked = sorted(
             results,
             key=lambda r: (
-                float(r.get("score", 0.0)) * 0.75
+                float(r.get("score", 0.0)) * 0.65
                 + lexical_overlap_score(question, r.get("text", r.get("content", ""))) * 0.25
+                + (0.15 if requested_ref and extract_section_ref(r.get("text", r.get("content", ""))) == requested_ref else 0.0)
             ),
             reverse=True,
         )
