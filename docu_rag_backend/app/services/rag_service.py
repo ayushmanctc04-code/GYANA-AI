@@ -82,6 +82,7 @@ TEACHING MODE:
 - Start from intuition, then move to structure.
 - Use examples, analogies, and mini summaries when helpful.
 - If the user sounds like a student, optimize for understanding rather than impressiveness.
+- End with a crisp takeaway or next-step when helpful.
 """,
     "coder": """
 CODING MODE:
@@ -109,12 +110,14 @@ DOCUMENT MODE:
 - Rewrite extracted material into clean prose or clean lists instead of dumping raw source text.
 - Avoid markdown artifacts like stray **, repeated headings, or copied outline fragments.
 - When solving from a file, organize the answer into readable sections and direct answers.
+- When source labels or page/slide markers are available, mention them naturally in the answer.
 """,
     "researcher": """
 RESEARCH MODE:
 - Think critically and synthesize evidence.
 - Distinguish known facts from inferences.
 - When external context is available, prioritize it over generic recall.
+- Present the conclusion first, then the reasoning.
 """,
 }
 
@@ -598,6 +601,31 @@ def build_dynamic_system(question, context_docs=""):
             )
     return SYSTEM + "\n\n" + task_instructions + "\n\n" + FINAL_POLISH_RULES + extra, task_profile
 
+def extract_doc_sources(context_docs):
+    sources = []
+    seen = set()
+    for match in re.finditer(r"\[From:\s*([^\]\n|]+)(?:\s*\|\s*([^\]\n]+))?\]", context_docs or ""):
+        title = match.group(1).strip()
+        ref = (match.group(2) or "").strip()
+        key = (title, ref)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = title if not ref else f"{title} • {ref}"
+        sources.append({"title": label, "url": ""})
+    return sources
+
+def lexical_overlap_score(question, text):
+    q_tokens = set(re.findall(r"[a-z0-9]{3,}", (question or "").lower()))
+    t_tokens = set(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
+    if not q_tokens or not t_tokens:
+        return 0.0
+    return len(q_tokens & t_tokens) / max(len(q_tokens), 1)
+
+def extract_section_ref(text):
+    match = re.search(r"^\[(Page\s+\d+|Slide\s+\d+|Notes)\]", text or "", flags=re.IGNORECASE | re.MULTILINE)
+    return match.group(1) if match else ""
+
 def build_search_context(sr, query):
     is_fallback = sr.get("_is_fallback",False)
     sources = [{"title":r["title"],"url":r["url"]} for r in sr.get("results",[]) if r.get("url")]
@@ -753,6 +781,7 @@ async def stream_agentic(
     sources = []
 
     if context_docs:
+        sources.extend(extract_doc_sources(context_docs))
         system = (system + "\n\nUSER DOCUMENT CONTEXT:\n" + context_docs
                   + "\n\nAnswer using this document. No JSON. No tools. Answer directly.")
 
@@ -963,7 +992,7 @@ async def ask_agentic(
         answer = await refine_coding_deliverable(question, answer)
         add_history(user_id,"user",question)
         add_history(user_id,"assistant",answer)
-        return {"answer":answer,"sources":[],"language":response_language}
+        return {"answer":answer,"sources":extract_doc_sources(context_docs),"language":response_language}
     except Exception as exc:
         if is_rate_limit_error(exc) and HF_KEY:
             try:
@@ -978,7 +1007,7 @@ async def ask_agentic(
                 add_history(user_id,"assistant",answer)
                 return {
                     "answer": answer,
-                    "sources": [],
+                    "sources": extract_doc_sources(context_docs),
                     "language": response_language,
                     "provider": "huggingface",
                 }
@@ -986,7 +1015,7 @@ async def ask_agentic(
                 pass
         return {
             "answer": friendly_model_error(exc),
-            "sources": [],
+            "sources": extract_doc_sources(context_docs),
             "language": response_language,
             "error": True,
         }
@@ -1057,13 +1086,32 @@ async def ingest_document(contents, filename, user_id):
 async def query_documents(question, user_id):
     if not RAG_READY: return ""
     try:
-        results = search_documents(question, top_k=5, user_id=user_id)
+        results = search_documents(question, top_k=7, user_id=user_id)
         if not results: return ""
+
+        reranked = sorted(
+            results,
+            key=lambda r: (
+                float(r.get("score", 0.0)) * 0.75
+                + lexical_overlap_score(question, r.get("text", r.get("content", ""))) * 0.25
+            ),
+            reverse=True,
+        )
+
         parts = []
-        for r in results:
-            src  = r.get("source", "document")
-            text = r.get("text", r.get("content", ""))
-            if text.strip(): parts.append("[From: " + src + "]\n" + text.strip())
+        seen = set()
+        for r in reranked[:5]:
+            src = r.get("source", "document")
+            text = r.get("text", r.get("content", "")).strip()
+            ref = extract_section_ref(text)
+            if not text:
+                continue
+            dedupe_key = (src, ref, text[:160])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            header = f"[From: {src}" + (f" | {ref}" if ref else "") + "]"
+            parts.append(header + "\n" + text)
         if not parts: return ""
         context = "\n\n".join(parts)
         print("[RAG] Found " + str(len(parts)) + " chunks for: " + question[:50])

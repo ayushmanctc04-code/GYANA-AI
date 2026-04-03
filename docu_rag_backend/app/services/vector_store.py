@@ -41,6 +41,9 @@ class Chunk:
     index:  int
 
 
+SECTION_MARKER_RE = re.compile(r"^\[(Page\s+\d+|Slide\s+\d+|Notes)\]\s*$", re.IGNORECASE)
+
+
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
@@ -172,21 +175,46 @@ def clear_store(user_id: str = "default") -> None:
 # Chunking — simple word-based, no infinite loops
 # ---------------------------------------------------------------------------
 def _chunk_text(text: str, source: str) -> list[Chunk]:
-    words = text.split()
     chunks: list[Chunk] = []
     idx = 0
 
     words_per_chunk = max(50, CHUNK_SIZE // 5)
     overlap_words   = max(10, CHUNK_OVERLAP // 5)
 
-    i = 0
-    while i < len(words):
-        chunk_words = words[i:i + words_per_chunk]
-        chunk_text  = " ".join(chunk_words).strip()
-        if chunk_text:
-            chunks.append(Chunk(text=chunk_text, source=source, index=idx))
-            idx += 1
-        i += max(1, words_per_chunk - overlap_words)
+    sections: list[tuple[str, str]] = []
+    current_label = ""
+    current_lines: list[str] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        marker = SECTION_MARKER_RE.match(line)
+        if marker:
+            if current_lines:
+                sections.append((current_label, " ".join(current_lines).strip()))
+                current_lines = []
+            current_label = marker.group(1)
+            continue
+        if line:
+            current_lines.append(line)
+
+    if current_lines:
+        sections.append((current_label, " ".join(current_lines).strip()))
+
+    if not sections:
+        sections = [("", text)]
+
+    for label, section_text in sections:
+        words = section_text.split()
+        i = 0
+        while i < len(words):
+            chunk_words = words[i:i + words_per_chunk]
+            chunk_text = " ".join(chunk_words).strip()
+            if chunk_text:
+                if label:
+                    chunk_text = f"[{label}]\n{chunk_text}"
+                chunks.append(Chunk(text=chunk_text, source=source, index=idx))
+                idx += 1
+            i += max(1, words_per_chunk - overlap_words)
 
     log.info("Chunked into %d chunks", len(chunks))
     return chunks
