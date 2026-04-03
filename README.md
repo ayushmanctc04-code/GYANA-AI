@@ -31,8 +31,8 @@ The goal is simple: one interface that feels like a premium blend of the best mo
 
 ### Backend
 - FastAPI
-- Hosted on Hugging Face Spaces
-- Groq-powered generation and transcription
+- currently Docker-ready for Hugging Face Spaces or Koyeb
+- Groq-powered generation and transcription with Hugging Face fallback
 - Agentic routing for general chat, docs, search, image, and code workflows
 
 ### Data and identity
@@ -64,13 +64,13 @@ README.md               Product and deployment guide
 
 ### Production setup
 - `rag-frontend` deploys to Vercel
-- `docu_rag_backend` deploys to Hugging Face Spaces
+- `docu_rag_backend` can deploy to Hugging Face Spaces or Koyeb
 - Firebase handles auth and frontend identity
 - Supabase stores vectorized document chunks
 
 ### Runtime flow
 1. User authenticates through Firebase
-2. Frontend sends requests to the Hugging Face backend
+2. Frontend sends requests to the backend host
 3. Backend selects the right AI workflow
 4. Document context is pulled from Supabase when relevant
 5. Streaming results are rendered back in the workspace UI
@@ -104,6 +104,62 @@ HF_API_KEY=...
 TAVILY_API_KEY=...
 SERPER_API_KEY=...
 ```
+
+## Koyeb Deployment
+
+Koyeb is the better backend host if you want Gyana to behave more like a stable product API and less like a demo runtime.
+
+### Why Koyeb fits this backend
+- better for long-lived API services than a Space-style demo container
+- cleaner FastAPI hosting with automatic `PORT`
+- easier scaling and more predictable request handling for chat, uploads, and voice
+
+### What is already ready in this repo
+- root [Dockerfile](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/Dockerfile) now works with dynamic `PORT`
+- Whisper fallback runtime dependency `ffmpeg` is included
+- root [.dockerignore](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/.dockerignore) trims the deploy context
+- backend health endpoint is available at `GET /health`
+
+### Koyeb service settings
+- Service type: `Web Service`
+- Deployment method: `GitHub`
+- Repository root: this repo
+- Dockerfile path: `Dockerfile`
+- Exposed HTTP port: leave default and let Koyeb provide `PORT`
+
+### Environment variables to add in Koyeb
+- `GROQ_API_KEY`
+- `GROQ_MODEL`
+- `GROQ_FALLBACK_MODELS`
+- `HF_API_KEY`
+- `HF_CHAT_MODEL`
+- `HF_CODER_MODEL`
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `WHISPER_MODEL`
+- `TAVILY_API_KEY` if you use Tavily search
+- `SERPER_API_KEY` if you use Serper search
+
+### Frontend changes after backend move
+- update Vercel `VITE_API_URL` to the new Koyeb backend URL
+- redeploy the frontend
+
+### Transfer checklist from Hugging Face to Koyeb
+1. Push the latest repo to GitHub.
+2. In Koyeb, create a new Web Service from this repository.
+3. Point Koyeb at the root `Dockerfile`.
+4. Add the backend environment variables listed above.
+5. Deploy and wait for the service URL.
+6. Open `https://your-koyeb-service/health` and confirm it returns `{\"status\":\"ok\"}`.
+7. In Vercel, change `VITE_API_URL` to the Koyeb URL.
+8. Redeploy the frontend.
+9. Test chat, uploads, voice, and coding requests.
+
+### Recommended cutover approach
+- keep Hugging Face running during the move
+- bring Koyeb up first
+- switch Vercel only after `/health`, `/capabilities`, and one real chat request work
+- then retire the old backend if everything is stable
 
 ## Local Development
 
@@ -182,7 +238,7 @@ Open the live frontend link on Vercel and validate:
 3. document upload and retrieval
 4. streaming answer quality
 5. voice query behavior
-6. backend connectivity from Vercel to Hugging Face
+6. backend connectivity from Vercel to the selected backend host
 
 ## Maintainer
 
