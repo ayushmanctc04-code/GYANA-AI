@@ -31,7 +31,7 @@ The goal is simple: one interface that feels like a premium blend of the best mo
 
 ### Backend
 - FastAPI
-- currently Docker-ready for Hugging Face Spaces, Koyeb, or Google Cloud Run
+- currently Docker-ready for Hugging Face Spaces or Koyeb
 - Groq-powered generation and transcription with Hugging Face fallback
 - Agentic routing for general chat, docs, search, image, and code workflows
 
@@ -64,7 +64,7 @@ README.md               Product and deployment guide
 
 ### Production setup
 - `rag-frontend` deploys to Vercel
-- `docu_rag_backend` can deploy to Hugging Face Spaces, Koyeb, or Google Cloud Run
+- `docu_rag_backend` can deploy to Hugging Face Spaces or Koyeb
 - Firebase handles auth and frontend identity
 - Supabase stores vectorized document chunks
 
@@ -105,18 +105,29 @@ TAVILY_API_KEY=...
 SERPER_API_KEY=...
 ```
 
-## Google Cloud Run Deployment
+## Koyeb Deployment
 
-Google Cloud Run is the best low-cost/free-tier backend host for this project if you want a more stable API runtime than a Hugging Face Space.
+Koyeb is the better backend host if you want Gyana to behave more like a stable product API and less like a demo runtime.
+
+### Why Koyeb fits this backend
+- better for long-lived API services than a Space-style demo container
+- cleaner FastAPI hosting with automatic `PORT`
+- easier scaling and more predictable request handling for chat, uploads, and voice
 
 ### What is already ready in this repo
-- root [Dockerfile](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/Dockerfile) supports the dynamic `PORT` Cloud Run injects
-- root [.dockerignore](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/.dockerignore) keeps the build context lean
-- root [cloudbuild.yaml](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/cloudbuild.yaml) builds the backend container image in Google Cloud
+- root [Dockerfile](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/Dockerfile) now works with dynamic `PORT`
+- Whisper fallback runtime dependency `ffmpeg` is included
+- root [.dockerignore](/C:/Users/ayush/Desktop/FINAL%20YEAR%20chat%20bot/.dockerignore) trims the deploy context
 - backend health endpoint is available at `GET /health`
-- Whisper fallback dependency `ffmpeg` is included in the container
 
-### Environment variables to configure in Cloud Run
+### Koyeb service settings
+- Service type: `Web Service`
+- Deployment method: `GitHub`
+- Repository root: this repo
+- Dockerfile path: `Dockerfile`
+- Exposed HTTP port: leave default and let Koyeb provide `PORT`
+
+### Environment variables to add in Koyeb
 - `GROQ_API_KEY`
 - `GROQ_MODEL`
 - `GROQ_FALLBACK_MODELS`
@@ -126,59 +137,29 @@ Google Cloud Run is the best low-cost/free-tier backend host for this project if
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 - `WHISPER_MODEL`
-- optional: `TAVILY_API_KEY`
-- optional: `SERPER_API_KEY`
+- `TAVILY_API_KEY` if you use Tavily search
+- `SERPER_API_KEY` if you use Serper search
 
-### Fastest deployment path
-1. Create a Google Cloud project.
-2. Enable:
-   - Cloud Run
-   - Cloud Build
-   - Artifact Registry
-3. Install and log into `gcloud`.
-4. From the repo root, run:
+### Frontend changes after backend move
+- update Vercel `VITE_API_URL` to the new Koyeb backend URL
+- redeploy the frontend
 
-```bash
-gcloud config set project YOUR_PROJECT_ID
-gcloud builds submit --config cloudbuild.yaml
-gcloud run deploy gyana-backend \
-  --image us-central1-docker.pkg.dev/YOUR_PROJECT_ID/gyana-ai/backend:latest \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated
-```
-
-5. In the Cloud Run service settings, add the environment variables listed above.
-6. Open:
-
-```bash
-https://YOUR_CLOUD_RUN_URL/health
-```
-
-and confirm it returns:
-
-```json
-{"status":"ok"}
-```
-
-7. In Vercel, update:
-
-```bash
-VITE_API_URL=https://YOUR_CLOUD_RUN_URL
-```
-
+### Transfer checklist from Hugging Face to Koyeb
+1. Push the latest repo to GitHub.
+2. In Koyeb, create a new Web Service from this repository.
+3. Point Koyeb at the root `Dockerfile`.
+4. Add the backend environment variables listed above.
+5. Deploy and wait for the service URL.
+6. Open `https://your-koyeb-service/health` and confirm it returns `{\"status\":\"ok\"}`.
+7. In Vercel, change `VITE_API_URL` to the Koyeb URL.
 8. Redeploy the frontend.
+9. Test chat, uploads, voice, and coding requests.
 
 ### Recommended cutover approach
 - keep Hugging Face running during the move
-- deploy Cloud Run first
-- confirm `/health`, `/capabilities`, one coding prompt, one upload flow, and one voice flow
-- switch Vercel only after the backend checks pass
-- retire the old backend after Cloud Run is stable
-
-## Koyeb Deployment
-
-Koyeb is still a valid paid alternative if you want a simpler managed app host than Google Cloud Run.
+- bring Koyeb up first
+- switch Vercel only after `/health`, `/capabilities`, and one real chat request work
+- then retire the old backend if everything is stable
 
 ## Local Development
 
