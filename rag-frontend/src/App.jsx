@@ -185,6 +185,16 @@ function getUserInitial(user) {
   return label.trim().charAt(0).toUpperCase();
 }
 
+function formatSourceLabel(source) {
+  if (!source) return "";
+  if (typeof source === "string") return source;
+  if (source.title) return source.title;
+  const base = source.source || "";
+  const ref = source.ref || "";
+  if (base && ref) return `${base} • ${ref}`;
+  return base || ref || "Source";
+}
+
 function getPreferredAudioMimeType() {
   if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
     return "";
@@ -1746,7 +1756,7 @@ function AppInner() {
                         <div className="source-row">
                           {message.sources.map((source, index) => (
                             <span key={`${message.id}-${index}`} className="source-chip">
-                              {source.title || source}
+                              {formatSourceLabel(source)}
                             </span>
                           ))}
                         </div>

@@ -27,9 +27,12 @@ STREAM_HISTORY_LIMIT = int(os.environ.get("STREAM_HISTORY_LIMIT", "8"))
 ASK_HISTORY_LIMIT = int(os.environ.get("ASK_HISTORY_LIMIT", "8"))
 
 _memory = defaultdict(lambda: deque(maxlen=30))
+_doc_focus = defaultdict(lambda: deque(maxlen=8))
 def get_history(uid): return list(_memory[uid])
 def add_history(uid, role, content): _memory[uid].append({"role": role, "content": content})
-def clear_history(uid): _memory[uid].clear()
+def clear_history(uid):
+    _memory[uid].clear()
+    _doc_focus[uid].clear()
 
 SYSTEM = """You are Gyana AI — a brilliant, warm, all-in-one AI assistant built by Ayushman Pati from Cuttack, Odisha, India.
 
@@ -544,6 +547,27 @@ def question_targets_documents(question):
         ]
     )
 
+def is_followup_document_question(question):
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+    followup_phrases = [
+        "this",
+        "that",
+        "it",
+        "from this",
+        "from that",
+        "from there",
+        "what about",
+        "and page",
+        "next page",
+        "same file",
+        "same pdf",
+        "that file",
+        "that pdf",
+    ]
+    return any(phrase in q for phrase in followup_phrases)
+
 def detect_task_profile(question, has_docs=False):
     q = question.lower()
     coding_keywords = [
@@ -665,8 +689,33 @@ def extract_doc_sources(context_docs):
             continue
         seen.add(key)
         label = title if not ref else f"{title} • {ref}"
-        sources.append({"title": label, "url": ""})
+        sources.append({"title": label, "url": "", "source": title, "ref": ref})
     return sources
+
+def update_doc_focus(user_id, sources):
+    if not user_id:
+        return
+    queue = _doc_focus[user_id]
+    queue.clear()
+    for source in (sources or [])[:6]:
+        title = source.get("source") or source.get("title") or ""
+        ref = source.get("ref") or ""
+        if title:
+            queue.append({"source": title, "ref": ref})
+
+def get_doc_focus_query_hint(user_id):
+    items = list(_doc_focus.get(user_id, []))
+    if not items:
+        return ""
+    parts = []
+    for item in items:
+        label = item.get("source", "")
+        ref = item.get("ref", "")
+        if label and ref:
+            parts.append(f"{label} {ref}")
+        elif label:
+            parts.append(label)
+    return " ".join(parts).strip()
 
 def extract_requested_section_ref(question):
     q = question or ""
@@ -1193,7 +1242,13 @@ async def ingest_document(contents, filename, user_id):
 async def query_documents(question, user_id):
     if not RAG_READY: return ""
     try:
-        results = search_documents(question, top_k=7, user_id=user_id)
+        augmented_question = question
+        if is_followup_document_question(question):
+            hint = get_doc_focus_query_hint(user_id)
+            if hint:
+                augmented_question = f"{question}\n\nCurrent document focus: {hint}"
+
+        results = search_documents(augmented_question, top_k=7, user_id=user_id)
         if not results: return ""
         requested_ref = extract_requested_section_ref(question)
 
@@ -1223,6 +1278,7 @@ async def query_documents(question, user_id):
             parts.append(header + "\n" + text)
         if not parts: return ""
         context = "\n\n".join(parts)
+        update_doc_focus(user_id, extract_doc_sources(context))
         print("[RAG] Found " + str(len(parts)) + " chunks for: " + question[:50])
         return context
     except Exception as e:
