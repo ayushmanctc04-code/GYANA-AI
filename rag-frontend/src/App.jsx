@@ -210,6 +210,20 @@ async function getOptimizedMicrophoneStream() {
   });
 }
 
+function createRecognition(language) {
+  const Recognition =
+    typeof window !== "undefined" &&
+    (window.SpeechRecognition || window.webkitSpeechRecognition);
+  if (!Recognition) return null;
+
+  const recognition = new Recognition();
+  recognition.lang = normalizeLanguageTag(language);
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 3;
+  return recognition;
+}
+
 function stripMarkdownForSpeech(text) {
   return String(text || "")
     .replace(/```[\s\S]*?```/g, " ")
@@ -904,6 +918,131 @@ function AppInner() {
     setSpeakingId(null);
   }
 
+  async function listenWithBrowserRecognition(languageHint = preferredLanguage, timeoutMs = 6500) {
+    const recognition = createRecognition(languageHint);
+    if (!recognition) return "";
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let finalTranscript = "";
+      let latestTranscript = "";
+
+      const finish = (value = "") => {
+        if (settled) return;
+        settled = true;
+        try {
+          recognition.onresult = null;
+          recognition.onerror = null;
+          recognition.onend = null;
+          recognition.stop();
+        } catch {
+          // ignore
+        }
+        resolve((value || latestTranscript || finalTranscript || "").trim());
+      };
+
+      const timer = window.setTimeout(() => finish(), timeoutMs);
+
+      recognition.onresult = (event) => {
+        latestTranscript = Array.from(event.results)
+          .map((result) => result[0]?.transcript || "")
+          .join(" ")
+          .trim();
+
+        finalTranscript = Array.from(event.results)
+          .filter((result) => result.isFinal)
+          .map((result) => result[0]?.transcript || "")
+          .join(" ")
+          .trim();
+
+        if (finalTranscript) {
+          window.clearTimeout(timer);
+          finish(finalTranscript);
+        }
+      };
+
+      recognition.onerror = () => {
+        window.clearTimeout(timer);
+        finish("");
+      };
+
+      recognition.onend = () => {
+        window.clearTimeout(timer);
+        finish(finalTranscript || latestTranscript);
+      };
+
+      try {
+        recognition.start();
+      } catch {
+        window.clearTimeout(timer);
+        finish("");
+      }
+    });
+  }
+
+  async function recordAndTranscribe({
+    endpoint = "standard",
+    languageHint = preferredLanguage,
+    promptHint = "",
+    maxDurationMs = 9000,
+  }) {
+    const stream = await getOptimizedMicrophoneStream();
+    const mimeType = getPreferredAudioMimeType();
+    const recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+      : new MediaRecorder(stream);
+    const chunks = [];
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        window.clearInterval(recordingTimerRef.current);
+        setIsRecording(false);
+        setRecordingTime(0);
+      };
+
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onerror = () => {
+        cleanup();
+        reject(new Error("Audio capture failed."));
+      };
+
+      recorder.onstop = async () => {
+        cleanup();
+        try {
+          const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+          const payload =
+            endpoint === "guru"
+              ? await transcribeOnly(blob, user.uid, { languageHint, promptHint })
+              : await transcribeAudio(blob, user.uid, { languageHint, promptHint });
+          resolve(payload);
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      recorder.start(200);
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = window.setInterval(
+        () => setRecordingTime((current) => current + 1),
+        1000
+      );
+
+      window.setTimeout(() => {
+        try {
+          if (recorder.state !== "inactive") recorder.stop();
+        } catch {
+          // ignore
+        }
+      }, maxDurationMs);
+    });
+  }
+
   function copyText(text) {
     if (!text) return;
     try {
@@ -1207,64 +1346,36 @@ function AppInner() {
   async function handleGuruVoice() {
     if (!user?.uid || busy) return;
 
-      try {
-        const stream = await getOptimizedMicrophoneStream();
-        const mimeType = getPreferredAudioMimeType();
-        const recorder = mimeType
-          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
-          : new MediaRecorder(stream);
-        const chunks = [];
+    try {
+      let spokenText = "";
 
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
+      if (voiceSupport.wake) {
+        spokenText = await listenWithBrowserRecognition(preferredLanguage, 6000);
+      }
 
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        window.clearInterval(recordingTimerRef.current);
-        setIsRecording(false);
-        setRecordingTime(0);
+      if (!spokenText.trim()) {
+        const transcription = await recordAndTranscribe({
+          endpoint: "guru",
+          languageHint: preferredLanguage,
+          promptHint:
+            "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
+          maxDurationMs: 8000,
+        });
+        spokenText = transcription.text || transcription.transcription || "";
+      }
 
-        try {
-            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
-            const transcription = await transcribeOnly(blob, user.uid, {
-              languageHint: preferredLanguage,
-              promptHint:
-                "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
-            });
-            const spokenText = transcription.text || transcription.transcription || "";
-          if (!spokenText.trim()) {
-            notify("I could not catch that voice input.", "error");
-            return;
-          }
-          setGuruOpen(false);
-          await runStream(
-            `${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`,
-            "auto",
-            { displayQuestion: spokenText, speakResponse: true }
-          );
-        } catch (error) {
-          notify(toErrorMessage(error, "Guru mode could not process voice."), "error");
-        }
-      };
+      if (!spokenText.trim()) {
+        notify("I could not catch that voice input.", "error");
+        return;
+      }
 
-      recorder.start(200);
-      setIsRecording(true);
-      setRecordingTime(0);
-      recordingTimerRef.current = window.setInterval(
-        () => setRecordingTime((current) => current + 1),
-        1000
-      );
-      setTimeout(() => {
-        try {
-          if (recorder.state !== "inactive") recorder.stop();
-        } catch {
-          // ignore
-        }
-      }, 7000);
+      setGuruOpen(false);
+      await runStream(`${GURU_PROMPT_PREFIX}\n\nUser said: ${spokenText}`, "auto", {
+        displayQuestion: spokenText,
+        speakResponse: true,
+      });
     } catch (error) {
-      notify(toErrorMessage(error, "Microphone access was denied."), "error");
+      notify(toErrorMessage(error, "Guru mode could not process voice."), "error");
     }
   }
 
@@ -1283,52 +1394,32 @@ function AppInner() {
       return;
     }
 
-      try {
-        const stream = await getOptimizedMicrophoneStream();
-        const mimeType = getPreferredAudioMimeType();
-        const recorder = mimeType
-          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
-          : new MediaRecorder(stream);
-        const chunks = [];
+    try {
+      let question = "";
 
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
+      if (voiceSupport.wake) {
+        question = await listenWithBrowserRecognition(preferredLanguage, 6500);
+      }
 
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        window.clearInterval(recordingTimerRef.current);
-        setIsRecording(false);
-        setRecordingTime(0);
+      if (!question.trim()) {
+        const data = await recordAndTranscribe({
+          endpoint: "standard",
+          languageHint: preferredLanguage,
+          promptHint:
+            "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
+          maxDurationMs: 10000,
+        });
+        question = data.transcribed_question || "";
+      }
 
-        try {
-            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
-            const data = await transcribeAudio(blob, user.uid, {
-              languageHint: preferredLanguage,
-              promptHint:
-                "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
-            });
-            const question = data.transcribed_question || "";
-          if (!question.trim()) {
-            notify("I could not catch that voice input.", "error");
-            return;
-          }
-          await runStream(question, mode);
-        } catch (error) {
-          notify(toErrorMessage(error, "Could not transcribe audio."), "error");
-        }
-      };
+      if (!question.trim()) {
+        notify("I could not catch that voice input.", "error");
+        return;
+      }
 
-      recorder.start(200);
-      setIsRecording(true);
-      setRecordingTime(0);
-      recordingTimerRef.current = window.setInterval(
-        () => setRecordingTime((current) => current + 1),
-        1000
-      );
+      await runStream(question, mode);
     } catch (error) {
-      notify(toErrorMessage(error, "Microphone access was denied."), "error");
+      notify(toErrorMessage(error, "Could not transcribe audio."), "error");
     }
   }
 
