@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+rag-frontend/node_modules
+rag-frontend/dist
+docu_rag_backend/uploads
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.env
+docu_rag_backend/.env
+*.log

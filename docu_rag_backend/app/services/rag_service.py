@@ -11,14 +11,20 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 HF_KEY     = os.environ.get("HF_API_KEY", "")
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "")
 SERPER_KEY = os.environ.get("SERPER_API_KEY", "")
-MODEL      = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL      = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 FALLBACK_MODELS = [
     model.strip()
     for model in os.environ.get("GROQ_FALLBACK_MODELS", "").split(",")
     if model.strip()
 ]
-HF_CHAT_MODEL = os.environ.get("HF_CHAT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-HF_CODER_MODEL = os.environ.get("HF_CODER_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
+HF_CHAT_MODEL = os.environ.get("HF_CHAT_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+HF_CODER_MODEL = os.environ.get("HF_CODER_MODEL", "Qwen/Qwen2.5-Coder-7B-Instruct")
+SEARCH_FALLBACK_MAX_TOKENS = int(os.environ.get("SEARCH_FALLBACK_MAX_TOKENS", "400"))
+STREAM_MAX_TOKENS = int(os.environ.get("STREAM_MAX_TOKENS", "1800"))
+TOOL_FOLLOWUP_MAX_TOKENS = int(os.environ.get("TOOL_FOLLOWUP_MAX_TOKENS", "1400"))
+ASK_MAX_TOKENS = int(os.environ.get("ASK_MAX_TOKENS", "1600"))
+STREAM_HISTORY_LIMIT = int(os.environ.get("STREAM_HISTORY_LIMIT", "8"))
+ASK_HISTORY_LIMIT = int(os.environ.get("ASK_HISTORY_LIMIT", "8"))
 
 _memory = defaultdict(lambda: deque(maxlen=30))
 def get_history(uid): return list(_memory[uid])
@@ -389,7 +395,7 @@ async def search_web(query):
         r = groq_create_with_fallback(messages=[
             {"role":"system","content":f"Today is {today}. Answer specifically. Note if info might be outdated."},
             {"role":"user","content":f"Provide detailed information about: {query}"}
-        ], temperature=0.3, max_tokens=700)
+        ], temperature=0.3, max_tokens=SEARCH_FALLBACK_MAX_TOKENS)
         text = r.choices[0].message.content.strip()
         return {"answer": text, "results": [{"title":"AI Knowledge Base","url":"","content":text}], "_is_fallback": True}
     except Exception as e:
@@ -797,7 +803,7 @@ async def stream_agentic(
             )
 
     messages = [{"role":"system","content":final_system}]
-    messages.extend(history[-12:])
+    messages.extend(history[-STREAM_HISTORY_LIMIT:])
     messages.append({"role":"user","content":question})
 
     full = ""; tool_buf = ""; in_tool = False
@@ -806,7 +812,7 @@ async def stream_agentic(
     try:
         yield "data: [LANGUAGE]" + response_language + "\n\n"
         stream = groq_create_with_fallback(
-            messages=messages, temperature=0.7, max_tokens=3000, stream=True)
+            messages=messages, temperature=0.7, max_tokens=STREAM_MAX_TOKENS, stream=True)
 
         for chunk in stream:
             token = chunk.choices[0].delta.content or ""
@@ -825,7 +831,7 @@ async def stream_agentic(
                         sources.extend(src2)
                         m2 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\n"+ctx2+"\n\nAnswer directly."}]
                         m2.extend(history[-6:]); m2.append({"role":"user","content":question})
-                        s2 = groq_create_with_fallback(messages=m2,temperature=0.6,max_tokens=2000,stream=True)
+                        s2 = groq_create_with_fallback(messages=m2,temperature=0.6,max_tokens=TOOL_FOLLOWUP_MAX_TOKENS,stream=True)
                         for c2 in s2:
                             t2 = c2.choices[0].delta.content or ""
                             if t2: yield "data: " + t2 + "\n\n"
@@ -835,7 +841,7 @@ async def stream_agentic(
                         if ur.get("content"):
                             m3 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer directly."}]
                             m3.extend(history[-6:]); m3.append({"role":"user","content":question})
-                            s3 = groq_create_with_fallback(messages=m3,temperature=0.6,max_tokens=2000,stream=True)
+                            s3 = groq_create_with_fallback(messages=m3,temperature=0.6,max_tokens=TOOL_FOLLOWUP_MAX_TOKENS,stream=True)
                             for c3 in s3:
                                 t3 = c3.choices[0].delta.content or ""
                                 if t3: yield "data: " + t3 + "\n\n"
@@ -878,7 +884,7 @@ async def stream_agentic(
                 fallback_text = await hf_chat_completion(
                     messages,
                     task_profile=task_profile,
-                    max_tokens=2200,
+                    max_tokens=ASK_MAX_TOKENS,
                     temperature=0.7,
                 )
                 fallback_text = await refine_coding_deliverable(question, fallback_text)
@@ -937,10 +943,10 @@ async def ask_agentic(
             )
 
     messages = [{"role":"system","content":final_system}]
-    messages.extend(history[-10:])
+    messages.extend(history[-ASK_HISTORY_LIMIT:])
     messages.append({"role":"user","content":question})
     try:
-        r = groq_create_with_fallback(messages=messages,temperature=0.7,max_tokens=2000)
+        r = groq_create_with_fallback(messages=messages,temperature=0.7,max_tokens=ASK_MAX_TOKENS)
         answer = r.choices[0].message.content.strip()
         answer = await refine_coding_deliverable(question, answer)
         add_history(user_id,"user",question)
@@ -952,7 +958,7 @@ async def ask_agentic(
                 answer = await hf_chat_completion(
                     messages,
                     task_profile=task_profile,
-                    max_tokens=2200,
+                    max_tokens=ASK_MAX_TOKENS,
                     temperature=0.7,
                 )
                 answer = await refine_coding_deliverable(question, answer)
