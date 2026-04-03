@@ -792,6 +792,45 @@ textarea {
   text-align: left;
 }
 
+.artifact-item.active {
+  border-color: var(--line-strong);
+  background: rgba(24, 184, 175, 0.1);
+}
+
+.artifact-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.artifact-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.artifact-preview-frame {
+  width: 100%;
+  min-height: 360px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.artifact-code {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(8, 11, 14, 0.9);
+  font-family: "IBM Plex Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .welcome-shell {
   width: min(680px, 100%);
   padding: 58px 18px 22px;

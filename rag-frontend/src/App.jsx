@@ -365,6 +365,31 @@ function extractCodeArtifacts(text) {
   return artifacts.filter((item) => item.code);
 }
 
+function isPreviewableLanguage(language) {
+  return ["html", "css", "javascript", "js", "jsx"].includes(String(language || "").toLowerCase());
+}
+
+function buildPreviewDocument(language, code) {
+  const normalizedLanguage = String(language || "").toLowerCase();
+  if (normalizedLanguage === "html") return code;
+  if (normalizedLanguage === "css") {
+    return `<style>${code}</style><div style="padding:24px;font-family:sans-serif;background:#fff;color:#111">CSS Preview</div>`;
+  }
+  if (normalizedLanguage === "js" || normalizedLanguage === "javascript") {
+    return `<div style="padding:24px;font-family:sans-serif">JavaScript Preview Console</div><script>${code}</script>`;
+  }
+  if (normalizedLanguage === "jsx") {
+    return `
+      <div id="root"></div>
+      <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+      <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+      <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+      <script type="text/babel">${code}</script>
+    `;
+  }
+  return code;
+}
+
 function renderTextBlock(lines, blockIndex) {
   const content = [];
   let listItems = [];
@@ -462,31 +487,10 @@ function MessageContent({ text }) {
 
 function CodeBlock({ language, code }) {
   const normalizedLanguage = language.toLowerCase();
-  const isPreviewable = ["html", "css", "javascript", "js", "jsx"].includes(normalizedLanguage);
+  const isPreviewable = isPreviewableLanguage(normalizedLanguage);
   const [showPreview, setShowPreview] = useState(
     () => normalizedLanguage === "html" || normalizedLanguage === "jsx"
   );
-
-  function buildPreview() {
-    const lang = normalizedLanguage;
-    if (lang === "html") return code;
-    if (lang === "css") {
-      return `<style>${code}</style><div style="padding:24px;font-family:sans-serif;background:#fff;color:#111">CSS Preview</div>`;
-    }
-    if (lang === "js" || lang === "javascript") {
-      return `<div style="padding:24px;font-family:sans-serif">JavaScript Preview Console</div><script>${code}</script>`;
-    }
-    if (lang === "jsx") {
-      return `
-        <div id="root"></div>
-        <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-        <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-        <script type="text/babel">${code}</script>
-      `;
-    }
-    return code;
-  }
 
   return (
     <div className="code-shell">
@@ -507,7 +511,7 @@ function CodeBlock({ language, code }) {
       {showPreview ? (
         <div className="code-preview-shell">
           <div className="code-preview-label">Live preview</div>
-          <iframe title="code preview" className="code-preview-frame" srcDoc={buildPreview()} sandbox="allow-scripts" />
+          <iframe title="code preview" className="code-preview-frame" srcDoc={buildPreviewDocument(language, code)} sandbox="allow-scripts" />
         </div>
       ) : null}
     </div>
@@ -632,6 +636,7 @@ function AppInner() {
     output: false,
   });
   const [speakingId, setSpeakingId] = useState(null);
+  const [selectedArtifactIndex, setSelectedArtifactIndex] = useState(0);
 
   const fileInputRef = useRef(null);
   const composerRef = useRef(null);
@@ -1505,8 +1510,9 @@ function AppInner() {
     .reverse()
     .find((message) => message.role === "assistant" && message.text);
   const latestArtifacts = extractCodeArtifacts(latestAssistantMessage?.text || "");
-  const showWorkspacePanel =
-    responseStyle === "artifact" && messages.length > 0 && latestArtifacts.length > 0;
+  const showWorkspacePanel = messages.length > 0 && latestArtifacts.length > 0;
+  const activeArtifact =
+    latestArtifacts[Math.min(selectedArtifactIndex, Math.max(latestArtifacts.length - 1, 0))] || null;
 
   return (
     <>
@@ -1778,11 +1784,11 @@ function AppInner() {
                   <div className="workspace-label">Artifacts</div>
                   <h3>Latest generated output</h3>
                   <div className="artifact-stack">
-                    {latestArtifacts.slice(0, 2).map((artifact, index) => (
+                    {latestArtifacts.map((artifact, index) => (
                       <button
                         key={`${artifact.language}-${index}`}
-                        className="artifact-item"
-                        onClick={() => copyText(artifact.code)}
+                        className={`artifact-item ${selectedArtifactIndex === index ? "active" : ""}`}
+                        onClick={() => setSelectedArtifactIndex(index)}
                       >
                         <strong>{artifact.language}</strong>
                         <span>{artifact.code.slice(0, 120) || "Generated code block"}</span>
@@ -1790,6 +1796,29 @@ function AppInner() {
                     ))}
                   </div>
                 </div>
+                {activeArtifact ? (
+                  <div className="workspace-card artifact-workbench">
+                    <div className="workspace-label">Workbench</div>
+                    <h3>{activeArtifact.language} output</h3>
+                    <div className="artifact-actions">
+                      <button
+                        className="text-button small"
+                        onClick={() => copyText(activeArtifact.code)}
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                    {isPreviewableLanguage(activeArtifact.language) ? (
+                      <iframe
+                        title="artifact preview"
+                        className="artifact-preview-frame"
+                        srcDoc={buildPreviewDocument(activeArtifact.language, activeArtifact.code)}
+                        sandbox="allow-scripts"
+                      />
+                    ) : null}
+                    <pre className="artifact-code">{activeArtifact.code}</pre>
+                  </div>
+                ) : null}
               </aside>
             ) : null}
           </div>

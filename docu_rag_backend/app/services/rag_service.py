@@ -151,6 +151,8 @@ RESPONSE_STYLES = {
     "balanced": """
 STYLE:
 - Default to polished, concise answers with clear structure when needed.
+- Sound calm, capable, and editorial rather than overly enthusiastic.
+- Do not use filler openings like "Of course", "Certainly", or "Great question".
 """,
     "deep": """
 STYLE:
@@ -185,6 +187,16 @@ CODING DELIVERABLE MODE:
   2. one complete runnable code block,
   3. one short note on how to use or customize it.
 - Do not produce multiple alternative drafts unless the user explicitly asks for options.
+- Do not promise to build something later. Build it in this response.
+- Do not say "I will create", "let me build", or similar future-tense filler before the result.
+""".strip()
+
+FINAL_POLISH_RULES = """
+FINAL POLISH:
+- Respond like a premium assistant: calm, sharp, and useful.
+- Avoid generic AI filler, apology padding, and motivational fluff unless the user is asking for emotional support.
+- If the user asks for a result, provide the result in this response instead of narrating what you are about to do.
+- Prefer clean formatting over long rambling paragraphs.
 """.strip()
 
 LANGUAGE_NAMES = {
@@ -584,7 +596,7 @@ def build_dynamic_system(question, context_docs=""):
                 "Do not ask whether they mean the PDF or file unless the request is truly ambiguous. "
                 "Use the available document context immediately."
             )
-    return SYSTEM + "\n\n" + task_instructions + extra, task_profile
+    return SYSTEM + "\n\n" + task_instructions + "\n\n" + FINAL_POLISH_RULES + extra, task_profile
 
 def build_search_context(sr, query):
     is_fallback = sr.get("_is_fallback",False)
