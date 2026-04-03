@@ -1372,22 +1372,14 @@ function AppInner() {
 
     try {
       stopSpeaking();
-      let spokenText = "";
-
-      if (voiceSupport.wake) {
-        spokenText = await listenWithBrowserRecognition(preferredLanguage, 6000);
-      }
-
-      if (!spokenText.trim()) {
-        const transcription = await recordAndTranscribe({
-          endpoint: "guru",
-          languageHint: preferredLanguage,
-          promptHint:
-            "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
-          maxDurationMs: 8000,
-        });
-        spokenText = transcription.text || transcription.transcription || "";
-      }
+      const transcription = await recordAndTranscribe({
+        endpoint: "guru",
+        languageHint: preferredLanguage,
+        promptHint:
+          "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
+        maxDurationMs: 8000,
+      });
+      const spokenText = transcription.text || transcription.transcription || "";
 
       if (!spokenText.trim()) {
         notify("I could not catch that voice input.", "error");
@@ -1421,22 +1413,14 @@ function AppInner() {
 
     try {
       stopSpeaking();
-      let question = "";
-
-      if (voiceSupport.wake) {
-        question = await listenWithBrowserRecognition(preferredLanguage, 6500);
-      }
-
-      if (!question.trim()) {
-        const data = await recordAndTranscribe({
-          endpoint: "standard",
-          languageHint: preferredLanguage,
-          promptHint:
-            "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
-          maxDurationMs: 10000,
-        });
-        question = data.transcribed_question || "";
-      }
+      const data = await recordAndTranscribe({
+        endpoint: "standard",
+        languageHint: preferredLanguage,
+        promptHint:
+          "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
+        maxDurationMs: 10000,
+      });
+      const question = data.transcribed_question || "";
 
       if (!question.trim()) {
         notify("I could not catch that voice input.", "error");

@@ -12,6 +12,11 @@ HF_KEY     = os.environ.get("HF_API_KEY", "")
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "")
 SERPER_KEY = os.environ.get("SERPER_API_KEY", "")
 MODEL      = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+FALLBACK_MODELS = [
+    model.strip()
+    for model in os.environ.get("GROQ_FALLBACK_MODELS", "").split(",")
+    if model.strip()
+]
 
 _memory = defaultdict(lambda: deque(maxlen=30))
 def get_history(uid): return list(_memory[uid])
@@ -379,7 +384,7 @@ async def search_web(query):
     print("[SEARCH] Using Groq knowledge fallback")
     try:
         today = datetime.now().strftime("%B %d, %Y")
-        r = groq_client.chat.completions.create(model=MODEL, messages=[
+        r = groq_create_with_fallback(messages=[
             {"role":"system","content":f"Today is {today}. Answer specifically. Note if info might be outdated."},
             {"role":"user","content":f"Provide detailed information about: {query}"}
         ], temperature=0.3, max_tokens=700)
@@ -587,6 +592,38 @@ def build_search_context(sr, query):
         ctx += "Answer using results. Cite [1][2] etc. No tool JSON."
     return ctx, sources
 
+def is_rate_limit_error(exc):
+    text = str(exc or "").lower()
+    return (
+        "rate limit" in text
+        or "rate_limit_exceeded" in text
+        or ("429" in text and "token" in text)
+    )
+
+def friendly_model_error(exc):
+    if is_rate_limit_error(exc):
+        return "Gyana is temporarily overloaded right now. Please try again in a few minutes."
+    return "Gyana hit a temporary backend issue. Please try again."
+
+def groq_create_with_fallback(**kwargs):
+    attempted = []
+    last_error = None
+
+    for model_name in [MODEL, *FALLBACK_MODELS]:
+        if not model_name or model_name in attempted:
+            continue
+        attempted.append(model_name)
+        try:
+            return groq_client.chat.completions.create(model=model_name, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if not is_rate_limit_error(exc):
+                raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No Groq model is configured.")
+
 async def stream_agentic(
     question,
     user_id,
@@ -675,8 +712,8 @@ async def stream_agentic(
 
     try:
         yield "data: [LANGUAGE]" + response_language + "\n\n"
-        stream = groq_client.chat.completions.create(
-            model=MODEL, messages=messages, temperature=0.7, max_tokens=3000, stream=True)
+        stream = groq_create_with_fallback(
+            messages=messages, temperature=0.7, max_tokens=3000, stream=True)
 
         for chunk in stream:
             token = chunk.choices[0].delta.content or ""
@@ -695,7 +732,7 @@ async def stream_agentic(
                         sources.extend(src2)
                         m2 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\n"+ctx2+"\n\nAnswer directly."}]
                         m2.extend(history[-6:]); m2.append({"role":"user","content":question})
-                        s2 = groq_client.chat.completions.create(model=MODEL,messages=m2,temperature=0.6,max_tokens=2000,stream=True)
+                        s2 = groq_create_with_fallback(messages=m2,temperature=0.6,max_tokens=2000,stream=True)
                         for c2 in s2:
                             t2 = c2.choices[0].delta.content or ""
                             if t2: yield "data: " + t2 + "\n\n"
@@ -705,7 +742,7 @@ async def stream_agentic(
                         if ur.get("content"):
                             m3 = [{"role":"system","content":SYSTEM+"\n\n"+language_instruction+"\n\nPAGE:\n"+ur["content"]+"\n\nAnswer directly."}]
                             m3.extend(history[-6:]); m3.append({"role":"user","content":question})
-                            s3 = groq_client.chat.completions.create(model=MODEL,messages=m3,temperature=0.6,max_tokens=2000,stream=True)
+                            s3 = groq_create_with_fallback(messages=m3,temperature=0.6,max_tokens=2000,stream=True)
                             for c3 in s3:
                                 t3 = c3.choices[0].delta.content or ""
                                 if t3: yield "data: " + t3 + "\n\n"
@@ -743,7 +780,7 @@ async def stream_agentic(
             yield "data: " + hold_buf + "\n\n"
 
     except Exception as e:
-        yield "data: [ERROR]" + str(e) + "\n\n"; return
+        yield "data: [ERROR]" + friendly_model_error(e) + "\n\n"; return
 
     if sources: yield "data: [SOURCES]" + json.dumps(sources) + "\n\n"
     clean = re.sub(r'^\s*\{[^}]{0,200}\}\s*', '', full).strip()
@@ -788,11 +825,19 @@ async def ask_agentic(
     messages = [{"role":"system","content":final_system}]
     messages.extend(history[-10:])
     messages.append({"role":"user","content":question})
-    r = groq_client.chat.completions.create(model=MODEL,messages=messages,temperature=0.7,max_tokens=2000)
-    answer = r.choices[0].message.content.strip()
-    add_history(user_id,"user",question)
-    add_history(user_id,"assistant",answer)
-    return {"answer":answer,"sources":[],"language":response_language}
+    try:
+        r = groq_create_with_fallback(messages=messages,temperature=0.7,max_tokens=2000)
+        answer = r.choices[0].message.content.strip()
+        add_history(user_id,"user",question)
+        add_history(user_id,"assistant",answer)
+        return {"answer":answer,"sources":[],"language":response_language}
+    except Exception as exc:
+        return {
+            "answer": friendly_model_error(exc),
+            "sources": [],
+            "language": response_language,
+            "error": True,
+        }
 
 async def stream_general(
     question,
