@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
     tesseract-ocr \
     tesseract-ocr-eng \
     libglib2.0-0 \
@@ -25,9 +24,8 @@ COPY docu_rag_backend/ .
 # Create uploads directory
 RUN mkdir -p uploads
 
-# Koyeb injects PORT automatically. Default stays 7860 so the same container
-# still works for Hugging Face Spaces.
+# Hugging Face Spaces runs on port 7860
 EXPOSE 7860
 
 # Start the app
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
