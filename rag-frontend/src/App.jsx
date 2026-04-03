@@ -741,7 +741,7 @@ function AppInner() {
   }, [toast]);
 
   useEffect(() => {
-    if (!voiceSupport.wake || !speechEnabled || !user?.uid || isRecording || busy) {
+    if (!voiceSupport.wake || !speechEnabled || !user?.uid || isRecording || busy || !!speakingId) {
       try {
         wakeRecognitionRef.current?.stop();
       } catch {
@@ -788,7 +788,12 @@ function AppInner() {
 
     recognition.onend = () => {
       const shouldRestart =
-        !wakeTriggeredRef.current && speechEnabled && voiceSupport.wake && !busy && !isRecording;
+        !wakeTriggeredRef.current &&
+        speechEnabled &&
+        voiceSupport.wake &&
+        !busy &&
+        !isRecording &&
+        !speakingId;
       if (shouldRestart) {
         wakeRestartTimerRef.current = window.setTimeout(() => {
           try {
@@ -823,7 +828,7 @@ function AppInner() {
         wakeRecognitionRef.current = null;
       }
     };
-  }, [busy, isRecording, preferredLanguage, speechEnabled, user?.uid, voiceSupport.wake]);
+  }, [busy, isRecording, preferredLanguage, speakingId, speechEnabled, user?.uid, voiceSupport.wake]);
 
   async function refreshDocumentStats(userId) {
     const stats = await fetchDocumentStats(userId);
@@ -848,18 +853,29 @@ function AppInner() {
     const scoredVoices = pool
       .map((voice) => {
         let score = 0;
-        if (/google|microsoft|apple/i.test(voice.name)) score += 4;
-        if (/neural|enhanced|premium|natural/i.test(voice.name)) score += 5;
-        if (/david|mark|george|daniel|james|lee|aaron|guy|male|man/i.test(voice.name)) score += 6;
-        if (/aria|zira|samantha|ava|serena|allison|moira/i.test(voice.name)) score += 2;
-        if (/enhanced|premium|natural/i.test(voice.name)) score += 3;
-        if (/calm|soothing|soft/i.test(voice.name)) score += 3;
-        if (!/compact|espeak|robot/i.test(voice.name)) score += 1;
+        if (/google|microsoft|apple/i.test(voice.name)) score += 5;
+        if (/neural|enhanced|premium|natural|studio|wavenet/i.test(voice.name)) score += 8;
+        if (/male|man|davis|david|mark|george|daniel|james|lee|aaron|guy/i.test(voice.name)) score += 2;
+        if (/calm|soothing|soft|warm/i.test(voice.name)) score += 4;
+        if (!/compact|espeak|robot|offline/i.test(voice.name)) score += 3;
+        if (voice.default) score += 2;
         return { voice, score };
       })
       .sort((a, b) => b.score - a.score);
 
     return scoredVoices[0]?.voice || pool[0] || voices[0];
+  }
+
+  function getVoiceDelivery(voice, languageHint = preferredLanguage) {
+    const lang = normalizeLanguageTag(languageHint).toLowerCase();
+    const name = voice?.name?.toLowerCase() || "";
+    const highQuality = /neural|enhanced|premium|natural|studio|wavenet/.test(name);
+    const isIndianLanguage = /-(in)\b/.test(lang) || ["hi", "bn", "or", "ta", "te", "mr", "gu", "pa", "ur"].includes(lang.split("-")[0]);
+
+    return {
+      rate: highQuality ? (isIndianLanguage ? 0.9 : 0.94) : (isIndianLanguage ? 0.86 : 0.9),
+      pitch: highQuality ? 0.96 : 0.92,
+    };
   }
 
   function speakText(text, messageId = "guru", languageHint = preferredLanguage) {
@@ -872,8 +888,9 @@ function AppInner() {
       synth.cancel();
       const normalizedLanguage = normalizeLanguageTag(languageHint);
       const chunks = chunkSpeechText(text);
-      const voice = pickBestVoice(normalizedLanguage);
-      speechQueueRef.current = chunks.slice();
+        const voice = pickBestVoice(normalizedLanguage);
+        const delivery = getVoiceDelivery(voice, normalizedLanguage);
+        speechQueueRef.current = chunks.slice();
 
       const runNext = () => {
         if (speechCancelledRef.current) {
@@ -888,12 +905,12 @@ function AppInner() {
           return;
         }
 
-        const utterance = new SpeechSynthesisUtterance(nextChunk);
-        if (voice) utterance.voice = voice;
-        utterance.lang = normalizedLanguage;
-        utterance.rate = /^en/i.test(normalizedLanguage) ? 0.96 : 0.92;
-        utterance.pitch = /^en/i.test(normalizedLanguage) ? 1 : 0.98;
-        utterance.volume = 1;
+          const utterance = new SpeechSynthesisUtterance(nextChunk);
+          if (voice) utterance.voice = voice;
+          utterance.lang = normalizedLanguage;
+          utterance.rate = delivery.rate;
+          utterance.pitch = delivery.pitch;
+          utterance.volume = 1;
         utterance.onstart = () => setSpeakingId(messageId);
         utterance.onend = () => runNext();
         utterance.onerror = () => runNext();
@@ -919,10 +936,10 @@ function AppInner() {
   }
 
   async function listenWithBrowserRecognition(languageHint = preferredLanguage, timeoutMs = 6500) {
-    const recognition = createRecognition(languageHint);
-    if (!recognition) return "";
+      const recognition = createRecognition(languageHint);
+      if (!recognition) return "";
 
-    return new Promise((resolve) => {
+      return new Promise((resolve) => {
       let settled = false;
       let finalTranscript = "";
       let latestTranscript = "";
@@ -942,6 +959,12 @@ function AppInner() {
       };
 
       const timer = window.setTimeout(() => finish(), timeoutMs);
+
+      try {
+        wakeRecognitionRef.current?.stop();
+      } catch {
+        // ignore
+      }
 
       recognition.onresult = (event) => {
         latestTranscript = Array.from(event.results)
@@ -1347,6 +1370,7 @@ function AppInner() {
     if (!user?.uid || busy) return;
 
     try {
+      stopSpeaking();
       let spokenText = "";
 
       if (voiceSupport.wake) {
@@ -1395,6 +1419,7 @@ function AppInner() {
     }
 
     try {
+      stopSpeaking();
       let question = "";
 
       if (voiceSupport.wake) {
