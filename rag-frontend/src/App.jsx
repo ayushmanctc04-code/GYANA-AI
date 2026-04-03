@@ -439,13 +439,14 @@ function MessageContent({ text }) {
 }
 
 function CodeBlock({ language, code }) {
-  const [showPreview, setShowPreview] = useState(false);
-  const isPreviewable = ["html", "css", "javascript", "js", "jsx"].includes(
-    language.toLowerCase()
+  const normalizedLanguage = language.toLowerCase();
+  const isPreviewable = ["html", "css", "javascript", "js", "jsx"].includes(normalizedLanguage);
+  const [showPreview, setShowPreview] = useState(
+    () => normalizedLanguage === "html" || normalizedLanguage === "jsx"
   );
 
   function buildPreview() {
-    const lang = language.toLowerCase();
+    const lang = normalizedLanguage;
     if (lang === "html") return code;
     if (lang === "css") {
       return `<style>${code}</style><div style="padding:24px;font-family:sans-serif;background:#fff;color:#111">CSS Preview</div>`;

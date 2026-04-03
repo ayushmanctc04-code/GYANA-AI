@@ -1052,7 +1052,11 @@ textarea {
   padding: 14px;
   overflow: auto;
   white-space: pre-wrap;
-  font-family: "Manrope", sans-serif;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  font-family: "IBM Plex Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.84rem;
+  line-height: 1.7;
 }
 
 .small {
@@ -1074,7 +1078,7 @@ textarea {
 
 .code-preview-frame {
   width: 100%;
-  min-height: 300px;
+  min-height: 420px;
   border: none;
   background: #ffffff;
   display: block;

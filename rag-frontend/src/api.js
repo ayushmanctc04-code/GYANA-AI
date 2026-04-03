@@ -231,14 +231,9 @@ export async function streamAssistant({
     buffer = segments.pop() || "";
 
     for (const segment of segments) {
-      const lines = segment
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => (line.startsWith("data: ") ? line.slice(6) : line.slice(5)));
-
-      for (const line of lines) {
-        emitData(line);
-      }
+      if (!segment.startsWith("data:")) continue;
+      const payload = segment.startsWith("data: ") ? segment.slice(6) : segment.slice(5);
+      emitData(payload);
     }
   }
 }
