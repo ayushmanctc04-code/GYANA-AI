@@ -1610,11 +1610,11 @@ function AppInner() {
         <main className="chat-stage">
           <div className="top-toolbar">
             <button
-            className={`sidebar-fab ${sidebarOpen ? "open" : ""}`}
-            onClick={() => setSidebarOpen((value) => !value)}
-            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              className={`sidebar-fab ${sidebarOpen ? "open" : ""}`}
+              onClick={() => setSidebarOpen((value) => !value)}
+              aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
             >
-              {sidebarOpen ? "Close" : "Menu"}
+              {sidebarOpen ? "Hide" : "Menu"}
             </button>
 
             <div className="top-utility-bar">
@@ -1624,28 +1624,28 @@ function AppInner() {
                 <span>{documentStats.total_documents} docs</span>
               </div>
               <div className="header-actions">
-              <label className="language-picker">
-                <span>Language</span>
-                <select
-                  value={preferredLanguage}
-                  onChange={(event) => setPreferredLanguage(event.target.value)}
+                <label className="language-picker">
+                  <span>Language</span>
+                  <select
+                    value={preferredLanguage}
+                    onChange={(event) => setPreferredLanguage(event.target.value)}
+                  >
+                    {LANGUAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className={`text-button ${speechEnabled ? "active-voice" : ""}`}
+                  onClick={() => {
+                    if (speechEnabled) stopSpeaking();
+                    setSpeechEnabled((value) => !value);
+                  }}
                 >
-                  {LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className={`text-button ${speechEnabled ? "active-voice" : ""}`}
-                onClick={() => {
-                  if (speechEnabled) stopSpeaking();
-                  setSpeechEnabled((value) => !value);
-                }}
-              >
-                {speechEnabled ? "Voice on" : "Voice off"}
-              </button>
+                  {speechEnabled ? "Voice on" : "Voice off"}
+                </button>
               <button className="guru-header-btn" onClick={() => setGuruOpen(true)}>
                 {voiceSupport.wake ? "Say “Hey Guru”" : "Open Guru"}
               </button>
