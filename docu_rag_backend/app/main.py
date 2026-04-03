@@ -8,7 +8,7 @@ import os
 import tempfile
 from typing import Literal, Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
@@ -81,6 +81,55 @@ def _stream_response(generator):
             "Access-Control-Allow-Origin": "*",
         },
     )
+
+
+def _transcription_prompt(language_hint: str = "auto", prompt_hint: str = "") -> str:
+    parts = [
+        "Transcribe this audio cleanly and naturally.",
+        "Important terms may include Gyana, Guru, Ayushman, Cuttack, and Odisha.",
+        "Keep the user's spoken wording faithful, but correct obvious recognition mistakes.",
+    ]
+    if language_hint and language_hint != "auto":
+        parts.append(f"The expected spoken language is {language_hint}.")
+    if prompt_hint:
+        parts.append(prompt_hint.strip())
+    return " ".join(parts)
+
+
+def _normalize_transcript(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    replacements = {
+        r"\b(giana|jiana|gyan ai|gyaan ai|jana ai)\b": "Gyana",
+        r"\b(he guru|hi guru|hey,? guru)\b": "Hey Guru",
+        r"\b(aiushman|ayushmaan|ayusman)\b": "Ayushman",
+        r"\b(cuttak|katak)\b": "Cuttack",
+        r"\b(odisa|orissa)\b": "Odisha",
+    }
+    for pattern, replacement in replacements.items():
+        cleaned = __import__("re").sub(pattern, replacement, cleaned, flags=__import__("re").IGNORECASE)
+
+    cleaned = cleaned.replace("  ", " ").strip()
+    return cleaned
+
+
+def _transcribe_audio_file(tmp_path: str, filename: str, language_hint: str = "auto", prompt_hint: str = "") -> str:
+    ext = os.path.splitext(filename or "")[1] or ".webm"
+    with open(tmp_path, "rb") as audio_file:
+        options = {
+            "model": "whisper-large-v3",
+            "file": (filename or f"audio{ext}", audio_file),
+            "response_format": "text",
+            "prompt": _transcription_prompt(language_hint, prompt_hint),
+            "temperature": 0,
+        }
+        if language_hint and language_hint != "auto":
+            options["language"] = language_hint
+        transcription = groq_client.audio.transcriptions.create(**options)
+    text = transcription if isinstance(transcription, str) else transcription.text
+    return _normalize_transcript(text)
 
 
 @app.get("/")
@@ -240,7 +289,11 @@ async def clear_mem(req: ClearRequest):
 
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(
+    file: UploadFile = File(...),
+    language_hint: str = Form("auto"),
+    prompt_hint: str = Form(""),
+):
     contents = await file.read()
     ext = os.path.splitext(file.filename or "")[1] or ".webm"
 
@@ -249,13 +302,7 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as audio_file:
-            transcription = groq_client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=(file.filename or f"audio{ext}", audio_file),
-                response_format="text",
-            )
-        text = transcription if isinstance(transcription, str) else transcription.text
+        text = _transcribe_audio_file(tmp_path, file.filename or f"audio{ext}", language_hint, prompt_hint)
         return {
             "text": text,
             "transcription": text,
@@ -271,7 +318,12 @@ async def transcribe(file: UploadFile = File(...)):
 
 
 @app.post("/speech-query")
-async def speech_query(file: UploadFile = File(...), request: Request = None):
+async def speech_query(
+    file: UploadFile = File(...),
+    request: Request = None,
+    language_hint: str = Form("auto"),
+    prompt_hint: str = Form(""),
+):
     user_id = _user_id_from_request(request)
     contents = await file.read()
     ext = os.path.splitext(file.filename or "")[1] or ".webm"
@@ -281,13 +333,7 @@ async def speech_query(file: UploadFile = File(...), request: Request = None):
         tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as audio_file:
-            transcription = groq_client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=(file.filename or f"audio{ext}", audio_file),
-                response_format="text",
-            )
-        question = transcription if isinstance(transcription, str) else transcription.text
+        question = _transcribe_audio_file(tmp_path, file.filename or f"audio{ext}", language_hint, prompt_hint)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     finally:

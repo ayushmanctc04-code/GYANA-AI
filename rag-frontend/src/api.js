@@ -69,9 +69,13 @@ export async function uploadDocument(file, userId, onProgress) {
   return data;
 }
 
-export async function transcribeAudio(blob, userId) {
+export async function transcribeAudio(blob, userId, options = {}) {
   const formData = new FormData();
   formData.append("file", blob, "voice.webm");
+  formData.append("language_hint", options.languageHint || "auto");
+  if (options.promptHint) {
+    formData.append("prompt_hint", options.promptHint);
+  }
 
   const { data } = await axios.post(`${API_BASE}/speech-query`, formData, {
     headers: getHeaders(userId),
@@ -80,9 +84,13 @@ export async function transcribeAudio(blob, userId) {
   return data;
 }
 
-export async function transcribeOnly(blob, userId) {
+export async function transcribeOnly(blob, userId, options = {}) {
   const formData = new FormData();
   formData.append("file", blob, "voice.webm");
+  formData.append("language_hint", options.languageHint || "auto");
+  if (options.promptHint) {
+    formData.append("prompt_hint", options.promptHint);
+  }
 
   const { data } = await axios.post(`${API_BASE}/transcribe`, formData, {
     headers: getHeaders(userId),

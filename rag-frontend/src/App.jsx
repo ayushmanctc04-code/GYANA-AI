@@ -185,6 +185,31 @@ function getUserInitial(user) {
   return label.trim().charAt(0).toUpperCase();
 }
 
+function getPreferredAudioMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/mp4",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+  ];
+  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+}
+
+async function getOptimizedMicrophoneStream() {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      sampleRate: 16000,
+    },
+  });
+}
+
 function stripMarkdownForSpeech(text) {
   return String(text || "")
     .replace(/```[\s\S]*?```/g, " ")
@@ -1182,13 +1207,13 @@ function AppInner() {
   async function handleGuruVoice() {
     if (!user?.uid || busy) return;
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks = [];
+      try {
+        const stream = await getOptimizedMicrophoneStream();
+        const mimeType = getPreferredAudioMimeType();
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+          : new MediaRecorder(stream);
+        const chunks = [];
 
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -1202,9 +1227,13 @@ function AppInner() {
         setRecordingTime(0);
 
         try {
-          const blob = new Blob(chunks, { type: mimeType });
-          const transcription = await transcribeOnly(blob, user.uid);
-          const spokenText = transcription.text || transcription.transcription || "";
+            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+            const transcription = await transcribeOnly(blob, user.uid, {
+              languageHint: preferredLanguage,
+              promptHint:
+                "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
+            });
+            const spokenText = transcription.text || transcription.transcription || "";
           if (!spokenText.trim()) {
             notify("I could not catch that voice input.", "error");
             return;
@@ -1254,13 +1283,13 @@ function AppInner() {
       return;
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks = [];
+      try {
+        const stream = await getOptimizedMicrophoneStream();
+        const mimeType = getPreferredAudioMimeType();
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+          : new MediaRecorder(stream);
+        const chunks = [];
 
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -1274,9 +1303,13 @@ function AppInner() {
         setRecordingTime(0);
 
         try {
-          const blob = new Blob(chunks, { type: mimeType });
-          const data = await transcribeAudio(blob, user.uid);
-          const question = data.transcribed_question || "";
+            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+            const data = await transcribeAudio(blob, user.uid, {
+              languageHint: preferredLanguage,
+              promptHint:
+                "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
+            });
+            const question = data.transcribed_question || "";
           if (!question.trim()) {
             notify("I could not catch that voice input.", "error");
             return;
