@@ -11,7 +11,6 @@ from typing import Literal, Optional
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from groq import Groq
 from pydantic import BaseModel, Field
 
 from app.services.rag_service import (
@@ -25,10 +24,8 @@ from app.services.rag_service import (
     stream_agentic,
     stream_general,
 )
+from app.services.speech_service import speech_provider_status, transcribe_audio_detailed
 from app.services.vector_store import get_stats
-
-
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 app = FastAPI(
     title="Gyana AI Workspace API",
@@ -83,55 +80,6 @@ def _stream_response(generator):
     )
 
 
-def _transcription_prompt(language_hint: str = "auto", prompt_hint: str = "") -> str:
-    parts = [
-        "Transcribe this audio cleanly and naturally.",
-        "Important terms may include Gyana, Guru, Ayushman, Cuttack, and Odisha.",
-        "Keep the user's spoken wording faithful, but correct obvious recognition mistakes.",
-    ]
-    if language_hint and language_hint != "auto":
-        parts.append(f"The expected spoken language is {language_hint}.")
-    if prompt_hint:
-        parts.append(prompt_hint.strip())
-    return " ".join(parts)
-
-
-def _normalize_transcript(text: str) -> str:
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return ""
-
-    replacements = {
-        r"\b(giana|jiana|gyan ai|gyaan ai|jana ai)\b": "Gyana",
-        r"\b(he guru|hi guru|hey,? guru)\b": "Hey Guru",
-        r"\b(aiushman|ayushmaan|ayusman)\b": "Ayushman",
-        r"\b(cuttak|katak)\b": "Cuttack",
-        r"\b(odisa|orissa)\b": "Odisha",
-    }
-    for pattern, replacement in replacements.items():
-        cleaned = __import__("re").sub(pattern, replacement, cleaned, flags=__import__("re").IGNORECASE)
-
-    cleaned = cleaned.replace("  ", " ").strip()
-    return cleaned
-
-
-def _transcribe_audio_file(tmp_path: str, filename: str, language_hint: str = "auto", prompt_hint: str = "") -> str:
-    ext = os.path.splitext(filename or "")[1] or ".webm"
-    with open(tmp_path, "rb") as audio_file:
-        options = {
-            "model": "whisper-large-v3",
-            "file": (filename or f"audio{ext}", audio_file),
-            "response_format": "text",
-            "prompt": _transcription_prompt(language_hint, prompt_hint),
-            "temperature": 0,
-        }
-        if language_hint and language_hint != "auto":
-            options["language"] = language_hint
-        transcription = groq_client.audio.transcriptions.create(**options)
-    text = transcription if isinstance(transcription, str) else transcription.text
-    return _normalize_transcript(text)
-
-
 @app.get("/")
 async def root():
     return {
@@ -163,7 +111,7 @@ async def capabilities():
         ],
         "providers": {
             "llm": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            "voice": "Groq Whisper",
+            "voice": speech_provider_status(),
             "vector_store": "Supabase pgvector",
         },
     }
@@ -302,11 +250,17 @@ async def transcribe(
         tmp_path = tmp.name
 
     try:
-        text = _transcribe_audio_file(tmp_path, file.filename or f"audio{ext}", language_hint, prompt_hint)
+        result = transcribe_audio_detailed(
+            tmp_path,
+            language_hint=language_hint,
+            prompt_hint=prompt_hint,
+        )
+        text = result["text"]
         return {
             "text": text,
             "transcription": text,
             "language": detect_language_code(text, fallback="en"),
+            "provider": result["provider"],
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -333,7 +287,12 @@ async def speech_query(
         tmp_path = tmp.name
 
     try:
-        question = _transcribe_audio_file(tmp_path, file.filename or f"audio{ext}", language_hint, prompt_hint)
+        result = transcribe_audio_detailed(
+            tmp_path,
+            language_hint=language_hint,
+            prompt_hint=prompt_hint,
+        )
+        question = result["text"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
@@ -348,6 +307,7 @@ async def speech_query(
     return {
         "transcribed_question": question,
         "detected_language": detected_language,
+        "transcription_provider": result["provider"],
         "answer": result["answer"],
         "sources": result.get("sources", []),
         "answer_language": result.get("language", detected_language),

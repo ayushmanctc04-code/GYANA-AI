@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger("gyana.speech")
 
@@ -26,20 +27,33 @@ _GROQ_MIME: dict[str, str] = {
 # Module-level local Whisper model cache
 _local_whisper = None
 
+_DOMAIN_CORRECTIONS = {
+    r"\b(giana|jiana|gyan ai|gyaan ai|jana ai)\b": "Gyana",
+    r"\b(he guru|hi guru|hey,? guru)\b": "Hey Guru",
+    r"\b(aiushman|ayushmaan|ayusman)\b": "Ayushman",
+    r"\b(cuttak|katak)\b": "Cuttack",
+    r"\b(odisa|orissa)\b": "Odisha",
+}
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def transcribe_audio(file_path: str | Path) -> str:
+def transcribe_audio(
+    file_path: str | Path,
+    *,
+    language_hint: str = "auto",
+    prompt_hint: str = "",
+) -> str:
     """
     Transcribe an audio file to text.
     Returns cleaned transcript string.
     """
     path = Path(file_path)
 
-    text = _try_groq(path)
+    text = _try_groq(path, language_hint=language_hint, prompt_hint=prompt_hint)
     if not text.strip():
-        text = _try_local_whisper(path)
+        text = _try_local_whisper(path, language_hint=language_hint, prompt_hint=prompt_hint)
 
     if not text.strip():
         raise RuntimeError(
@@ -50,10 +64,47 @@ def transcribe_audio(file_path: str | Path) -> str:
     return _clean_transcript(text)
 
 
+def transcribe_audio_detailed(
+    file_path: str | Path,
+    *,
+    language_hint: str = "auto",
+    prompt_hint: str = "",
+) -> dict[str, str]:
+    path = Path(file_path)
+
+    text = _try_groq(path, language_hint=language_hint, prompt_hint=prompt_hint)
+    provider = "groq-whisper"
+    if not text.strip():
+        text = _try_local_whisper(path, language_hint=language_hint, prompt_hint=prompt_hint)
+        provider = "local-whisper"
+
+    cleaned = _clean_transcript(text)
+    if not cleaned:
+        raise RuntimeError(
+            f"Could not transcribe '{path.name}'. "
+            "Ensure the audio is audible and a transcription engine is configured."
+        )
+
+    return {"text": cleaned, "provider": provider}
+
+
 # ---------------------------------------------------------------------------
 # Groq Whisper API
 # ---------------------------------------------------------------------------
-def _try_groq(path: Path) -> str:
+def _build_transcription_prompt(language_hint: str = "auto", prompt_hint: str = "") -> str:
+    parts = [
+        "Transcribe this audio cleanly and naturally.",
+        "Important terms may include Gyana, Guru, Ayushman, Cuttack, and Odisha.",
+        "Keep the user's spoken wording faithful, but correct obvious recognition mistakes.",
+    ]
+    if language_hint and language_hint != "auto":
+        parts.append(f"The expected spoken language is {language_hint}.")
+    if prompt_hint:
+        parts.append(prompt_hint.strip())
+    return " ".join(parts)
+
+
+def _try_groq(path: Path, language_hint: str = "auto", prompt_hint: str = "") -> str:
     """Use Groq's hosted Whisper large-v3 for fast cloud transcription."""
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
@@ -71,7 +122,9 @@ def _try_groq(path: Path) -> str:
                 file            = (path.name, audio_file, mime),
                 model           = "whisper-large-v3",
                 response_format = "text",
-                language        = None,    # auto-detect language
+                language        = None if language_hint == "auto" else language_hint,
+                prompt          = _build_transcription_prompt(language_hint, prompt_hint),
+                temperature     = 0,
             )
 
         # result is a plain string when response_format="text"
@@ -90,7 +143,7 @@ def _try_groq(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # Local OpenAI Whisper (offline fallback)
 # ---------------------------------------------------------------------------
-def _try_local_whisper(path: Path) -> str:
+def _try_local_whisper(path: Path, language_hint: str = "auto", prompt_hint: str = "") -> str:
     """
     Run Whisper locally (CPU).
     Install: pip install openai-whisper
@@ -109,6 +162,8 @@ def _try_local_whisper(path: Path) -> str:
             str(path),
             fp16    = False,
             verbose = False,
+            language = None if language_hint == "auto" else language_hint,
+            initial_prompt = _build_transcription_prompt(language_hint, prompt_hint),
         )
         text = result.get("text", "")
         log.info("Local Whisper transcription complete: %d chars", len(text))
@@ -135,5 +190,18 @@ def _clean_transcript(text: str) -> str:
     for pattern in artefacts:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
+    for pattern, replacement in _DOMAIN_CORRECTIONS.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def speech_provider_status() -> dict[str, Optional[str]]:
+    provider = "groq-whisper" if os.getenv("GROQ_API_KEY") else "local-whisper"
+    local_model = os.getenv("WHISPER_MODEL", "base")
+    return {
+        "active": provider,
+        "fallback": "local-whisper",
+        "local_model": local_model,
+    }
