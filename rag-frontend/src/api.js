@@ -2,8 +2,11 @@ import axios from "axios";
 
 export const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-function getHeaders(userId) {
-  return userId ? { "x-user-id": userId } : {};
+function getHeaders(userId, sessionId) {
+  return {
+    ...(userId ? { "x-user-id": userId } : {}),
+    ...(sessionId ? { "x-session-id": sessionId } : {}),
+  };
 }
 
 function getErrorMessage(error, fallback = "Something went wrong.") {
@@ -47,9 +50,10 @@ export async function clearDocuments(userId) {
   return data;
 }
 
-export async function clearMemory(userId) {
+export async function clearMemory(userId, sessionId) {
   const { data } = await axios.post(`${API_BASE}/clear-memory`, {
     user_id: userId,
+    session_id: sessionId,
   });
   return data;
 }
@@ -78,7 +82,7 @@ export async function transcribeAudio(blob, userId, options = {}) {
   }
 
   const { data } = await axios.post(`${API_BASE}/speech-query`, formData, {
-    headers: getHeaders(userId),
+    headers: getHeaders(userId, options.sessionId),
   });
 
   return data;
@@ -93,7 +97,7 @@ export async function transcribeOnly(blob, userId, options = {}) {
   }
 
   const { data } = await axios.post(`${API_BASE}/transcribe`, formData, {
-    headers: getHeaders(userId),
+    headers: getHeaders(userId, options.sessionId),
   });
 
   return data;
@@ -102,6 +106,7 @@ export async function transcribeOnly(blob, userId, options = {}) {
 export async function askOnce({
   question,
   userId,
+  sessionId,
   mode = "auto",
   language = "auto",
   focus = "adaptive",
@@ -111,6 +116,7 @@ export async function askOnce({
     const { data } = await axios.post(`${API_BASE}/ask`, {
       question,
       user_id: userId,
+      session_id: sessionId,
       mode,
       language,
       focus,
@@ -125,6 +131,7 @@ export async function askOnce({
 export async function streamAssistant({
   question,
   userId,
+  sessionId,
   mode = "auto",
   language = "auto",
   focus = "adaptive",
@@ -136,11 +143,12 @@ export async function streamAssistant({
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...getHeaders(userId),
+      ...getHeaders(userId, sessionId),
     },
     body: JSON.stringify({
       question,
       user_id: userId,
+      session_id: sessionId,
       mode,
       language,
       focus,

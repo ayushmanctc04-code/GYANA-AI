@@ -1297,12 +1297,13 @@ async def ingest_document(contents, filename, user_id):
         print(f"[RAG] Ingest error: {e}")
         return {"chunks": 0, "language": "en"}
 
-async def query_documents(question, user_id):
+async def query_documents(question, user_id, memory_scope=None):
     if not RAG_READY: return ""
     try:
+        focus_scope = memory_scope or user_id
         augmented_question = question
         if is_followup_document_question(question):
-            hint = get_doc_focus_query_hint(user_id)
+            hint = get_doc_focus_query_hint(focus_scope)
             if hint:
                 augmented_question = f"{question}\n\nCurrent document focus: {hint}"
 
@@ -1336,7 +1337,7 @@ async def query_documents(question, user_id):
             parts.append(header + "\n" + text)
         if not parts: return ""
         context = "\n\n".join(parts)
-        update_doc_focus(user_id, extract_doc_sources(context))
+        update_doc_focus(focus_scope, extract_doc_sources(context))
         print("[RAG] Found " + str(len(parts)) + " chunks for: " + question[:50])
         return context
     except Exception as e:

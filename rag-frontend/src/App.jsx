@@ -885,6 +885,7 @@ function AppInner() {
     () => (firestoreDb && user?.uid ? doc(firestoreDb, "gyana_sessions", user.uid) : null),
     [user?.uid]
   );
+  const conversationMemoryId = activeSessionId || "default-session";
   const deviceLabel = getDeviceLabel();
 
   useEffect(() => {
@@ -1581,8 +1582,16 @@ function AppInner() {
           const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
           const payload =
             endpoint === "guru"
-              ? await transcribeOnly(blob, user.uid, { languageHint, promptHint })
-              : await transcribeAudio(blob, user.uid, { languageHint, promptHint });
+              ? await transcribeOnly(blob, user.uid, {
+                  languageHint,
+                  promptHint,
+                  sessionId: conversationMemoryId,
+                })
+              : await transcribeAudio(blob, user.uid, {
+                  languageHint,
+                  promptHint,
+                  sessionId: conversationMemoryId,
+                });
           resolve(payload);
         } catch (error) {
           reject(error);
@@ -1712,7 +1721,12 @@ function AppInner() {
   async function handleClearMemory() {
     if (!user?.uid) return;
     try {
-      await clearMemory(user.uid);
+      await clearMemory(user.uid, conversationMemoryId);
+      updateActiveSession((session) => ({
+        ...session,
+        title: "New conversation",
+        messages: [],
+      }));
       notify("Conversation memory cleared.", "success");
     } catch (error) {
       notify(toErrorMessage(error, "Could not clear memory."), "error");
@@ -1795,7 +1809,14 @@ function AppInner() {
     setDraft("");
   }
 
-  function handleDeleteConversation(sessionId) {
+  async function handleDeleteConversation(sessionId) {
+    if (user?.uid) {
+      try {
+        await clearMemory(user.uid, sessionId);
+      } catch {
+        // ignore session-specific memory cleanup failures
+      }
+    }
     setSessions((current) => {
       const remaining = current.filter((session) => session.id !== sessionId);
       if (!remaining.length) {
@@ -1891,6 +1912,7 @@ function AppInner() {
         const data = await askOnce({
           question,
           userId: user.uid,
+          sessionId: conversationMemoryId,
           mode: chosenMode,
           language: preferredLanguage,
           focus: focusPreset,
@@ -1914,6 +1936,7 @@ function AppInner() {
       await streamAssistant({
         question,
         userId: user.uid,
+        sessionId: conversationMemoryId,
         mode: chosenMode,
         language: preferredLanguage,
         focus: focusPreset,
@@ -1973,6 +1996,7 @@ function AppInner() {
         const data = await askOnce({
           question,
           userId: user.uid,
+          sessionId: conversationMemoryId,
           mode: chosenMode,
           language: preferredLanguage,
           focus: focusPreset,

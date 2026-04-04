@@ -44,6 +44,7 @@ app.add_middleware(
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
     user_id: str = "default"
+    session_id: Optional[str] = None
     context: Optional[str] = None
     mode: Literal["auto", "general", "docs"] = "auto"
     language: str = "auto"
@@ -53,17 +54,26 @@ class AskRequest(BaseModel):
 
 class ClearRequest(BaseModel):
     user_id: str = "default"
+    session_id: Optional[str] = None
 
 
 def _user_id_from_request(request: Optional[Request]) -> str:
     return request.headers.get("x-user-id", "default") if request else "default"
 
 
-async def _resolve_document_context(question: str, user_id: str, mode: str) -> str:
+def _session_id_from_request(request: Optional[Request]) -> Optional[str]:
+    return request.headers.get("x-session-id") if request else None
+
+
+def _memory_scope(user_id: str, session_id: Optional[str]) -> str:
+    return f"{user_id}:{session_id}" if session_id else user_id
+
+
+async def _resolve_document_context(question: str, user_id: str, mode: str, memory_scope: Optional[str] = None) -> str:
     if mode == "general":
         return ""
     try:
-        return await query_documents(question, user_id)
+        return await query_documents(question, user_id, memory_scope=memory_scope or user_id)
     except Exception:
         return ""
 
@@ -129,13 +139,14 @@ async def document_stats(request: Request):
 
 @app.post("/ask/stream")
 async def ask_stream(req: AskRequest):
-    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
+    memory_scope = _memory_scope(req.user_id, req.session_id)
+    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode, memory_scope)
 
     async def generate():
         if req.mode == "general":
             async for chunk in stream_general(
                 req.question,
-                req.user_id,
+                memory_scope,
                 req.language,
                 req.focus,
                 req.response_style,
@@ -145,7 +156,7 @@ async def ask_stream(req: AskRequest):
 
         async for chunk in stream_agentic(
             req.question,
-            req.user_id,
+            memory_scope,
             context_docs,
             req.language,
             req.focus,
@@ -158,10 +169,11 @@ async def ask_stream(req: AskRequest):
 
 @app.post("/ask-general/stream")
 async def ask_general_stream(req: AskRequest):
+    memory_scope = _memory_scope(req.user_id, req.session_id)
     async def generate():
         async for chunk in stream_general(
             req.question,
-            req.user_id,
+            memory_scope,
             req.language,
             req.focus,
             req.response_style,
@@ -173,18 +185,19 @@ async def ask_general_stream(req: AskRequest):
 
 @app.post("/ask")
 async def ask(req: AskRequest):
-    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode)
+    memory_scope = _memory_scope(req.user_id, req.session_id)
+    context_docs = await _resolve_document_context(req.question, req.user_id, req.mode, memory_scope)
     if req.mode == "general":
         return await ask_general(
             req.question,
-            req.user_id,
+            memory_scope,
             req.language,
             req.focus,
             req.response_style,
         )
     return await ask_agentic(
         req.question,
-        req.user_id,
+        memory_scope,
         context_docs,
         req.language,
         req.focus,
@@ -194,9 +207,10 @@ async def ask(req: AskRequest):
 
 @app.post("/ask-general")
 async def ask_general_ep(req: AskRequest):
+    memory_scope = _memory_scope(req.user_id, req.session_id)
     return await ask_general(
         req.question,
-        req.user_id,
+        memory_scope,
         req.language,
         req.focus,
         req.response_style,
@@ -233,7 +247,7 @@ async def delete_docs(request: Request):
 
 @app.post("/clear-memory")
 async def clear_mem(req: ClearRequest):
-    clear_history(req.user_id)
+    clear_history(_memory_scope(req.user_id, req.session_id))
     return {"message": "Memory cleared"}
 
 
@@ -280,6 +294,8 @@ async def speech_query(
     prompt_hint: str = Form(""),
 ):
     user_id = _user_id_from_request(request)
+    session_id = _session_id_from_request(request)
+    memory_scope = _memory_scope(user_id, session_id)
     contents = await file.read()
     ext = os.path.splitext(file.filename or "")[1] or ".webm"
 
@@ -302,9 +318,9 @@ async def speech_query(
         except Exception:
             pass
 
-    context_docs = await _resolve_document_context(question, user_id, "auto")
+    context_docs = await _resolve_document_context(question, user_id, "auto", memory_scope)
     detected_language = detect_language_code(question, fallback="en")
-    result = await ask_agentic(question, user_id, context_docs, detected_language)
+    result = await ask_agentic(question, memory_scope, context_docs, detected_language)
     return {
         "transcribed_question": question,
         "detected_language": detected_language,
