@@ -36,6 +36,7 @@ const DEVICE_STORAGE_KEY = "gyana.workspace.deviceId";
 const ACCEPTED_FILES = ".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.mp3,.wav,.m4a,.webm";
 const DEVICE_LOCK_TIMEOUT_MS = 90 * 1000;
 const DEVICE_HEARTBEAT_MS = 30 * 1000;
+const REMOTE_BOOT_TIMEOUT_MS = 8000;
 const GURU_PROMPT_PREFIX =
   "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
 
@@ -164,6 +165,22 @@ function getDeviceLabel() {
   const platform = navigator.platform || "Unknown platform";
   const mobile = /android|iphone|ipad|mobile/i.test(navigator.userAgent || "");
   return mobile ? `Phone • ${platform}` : `Laptop/Desktop • ${platform}`;
+}
+
+async function withTimeout(task, timeoutMs = REMOTE_BOOT_TIMEOUT_MS) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      task,
+      new Promise((_, reject) => {
+        timer = window.setTimeout(() => reject(new Error("timeout")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      window.clearTimeout(timer);
+    }
+  }
 }
 
 function normalizeLanguageTag(language) {
@@ -809,7 +826,7 @@ function AppInner() {
     }
 
     try {
-      const snap = await getDoc(sessionDocRef);
+      const snap = await withTimeout(getDoc(sessionDocRef));
       const payload = snap.exists() ? snap.data() : {};
       const currentLock = payload?.deviceLock || null;
       const now = Date.now();
@@ -838,13 +855,14 @@ function AppInner() {
         lastSeen: now,
       };
 
-      await setDoc(
+      await withTimeout(
+        setDoc(
         sessionDocRef,
         {
           deviceLock: nextLock,
         },
         { merge: true }
-      );
+      ));
 
       setDeviceLock({ checked: true, allowed: true, owner: null });
       setRemoteReady(false);
@@ -874,7 +892,7 @@ function AppInner() {
       if (!allowed || cancelled) return;
 
       try {
-        const snap = await getDoc(sessionDocRef);
+        const snap = await withTimeout(getDoc(sessionDocRef));
         const payload = snap.exists() ? snap.data() : {};
         const remoteSessions = Array.isArray(payload?.sessions) && payload.sessions.length
           ? payload.sessions
@@ -892,7 +910,7 @@ function AppInner() {
         }
       } catch {
         if (!cancelled) {
-          loadedRemoteSessionsRef.current = true;
+          loadedRemoteSessionsRef.current = false;
           setRemoteReady(true);
         }
       }
