@@ -219,11 +219,48 @@ function getUserInitial(user) {
 function formatSourceLabel(source) {
   if (!source) return "";
   if (typeof source === "string") return source;
-  if (source.title) return source.title;
   const base = source.source || "";
   const ref = source.ref || "";
   if (base && ref) return `${base} • ${ref}`;
-  return base || ref || "Source";
+  return base || ref || source.title || "Source";
+}
+
+function formatSourceReference(ref) {
+  if (!ref) return "";
+  return String(ref)
+    .replace(/\bpage\s+(\d+)\b/i, "p. $1")
+    .replace(/\bpages\s+(\d+(?:\s*-\s*\d+)?)\b/i, "pp. $1")
+    .replace(/\bslide\s+(\d+)\b/i, "slide $1")
+    .trim();
+}
+
+function SourceChip({ source }) {
+  const href = typeof source === "object" ? source.url : "";
+  const title =
+    typeof source === "object"
+      ? source.source || source.title || formatSourceLabel(source)
+      : formatSourceLabel(source);
+  const ref = typeof source === "object" ? formatSourceReference(source.ref) : "";
+  const content = (
+    <>
+      <strong>{title}</strong>
+      {ref ? <span>{ref}</span> : null}
+    </>
+  );
+
+  if (href) {
+    return (
+      <a className="source-chip source-chip-link" href={href} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <span className="source-chip" title={formatSourceLabel(source)}>
+      {content}
+    </span>
+  );
 }
 
 function getPreferredAudioMimeType() {
@@ -2045,9 +2082,7 @@ function AppInner() {
                       {message.sources?.length ? (
                         <div className="source-row">
                           {message.sources.map((source, index) => (
-                            <span key={`${message.id}-${index}`} className="source-chip">
-                              {formatSourceLabel(source)}
-                            </span>
+                            <SourceChip key={`${message.id}-${index}`} source={source} />
                           ))}
                         </div>
                       ) : null}

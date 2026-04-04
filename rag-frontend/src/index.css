@@ -1153,12 +1153,41 @@ textarea {
 }
 
 .source-chip {
-  padding: 8px 12px;
-  border-radius: 999px;
+  padding: 9px 12px;
+  border-radius: 16px;
   border: 1px solid var(--line);
   background: rgba(24, 184, 175, 0.08);
   font-size: 0.78rem;
   font-weight: 600;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.2;
+}
+
+.source-chip strong,
+.source-chip span {
+  display: block;
+}
+
+.source-chip strong {
+  color: var(--text);
+}
+
+.source-chip span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.source-chip-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.source-chip-link:hover {
+  border-color: rgba(83, 214, 205, 0.4);
+  background: rgba(24, 184, 175, 0.12);
 }
 
 .composer-wrap {
