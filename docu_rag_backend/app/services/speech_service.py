@@ -1,5 +1,5 @@
 # =============================================================================
-#  Gyana AI  –  Speech Service
+#  Vedrix  –  Speech Service
 #  Primary:  Groq Whisper API  (whisper-large-v3)  – fast, cloud-based
 #  Fallback: OpenAI Whisper local model            – offline, no API key needed
 # =============================================================================
@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("gyana.speech")
+log = logging.getLogger("vedrix.speech")
 
 # Supported audio MIME types for Groq
 _GROQ_MIME: dict[str, str] = {
@@ -28,7 +28,7 @@ _GROQ_MIME: dict[str, str] = {
 _local_whisper = None
 
 _DOMAIN_CORRECTIONS = {
-    r"\b(giana|jiana|gyan ai|gyaan ai|jana ai)\b": "Gyana",
+    r"\b(giana|jiana|gyan ai|gyaan ai|jana ai|vedriks|vedrics|vedrixx|bedrix)\b": "Vedrix",
     r"\b(he guru|hi guru|hey,? guru)\b": "Hey Guru",
     r"\b(aiushman|ayushmaan|ayusman)\b": "Ayushman",
     r"\b(cuttak|katak)\b": "Cuttack",
@@ -94,7 +94,7 @@ def transcribe_audio_detailed(
 def _build_transcription_prompt(language_hint: str = "auto", prompt_hint: str = "") -> str:
     parts = [
         "Transcribe this audio cleanly and naturally.",
-        "Important terms may include Gyana, Guru, Ayushman, Cuttack, and Odisha.",
+        "Important terms may include Vedrix, Guru, Ayushman, Cuttack, and Odisha.",
         "Keep the user's spoken wording faithful, but correct obvious recognition mistakes.",
     ]
     if language_hint and language_hint != "auto":

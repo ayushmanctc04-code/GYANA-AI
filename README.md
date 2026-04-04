@@ -1,5 +1,5 @@
 ---
-title: Gyana AI
+title: Vedrix
 emoji: 🧠
 colorFrom: green
 colorTo: blue
@@ -7,9 +7,9 @@ sdk: docker
 pinned: false
 ---
 
-# Gyana AI Workspace
+# Vedrix Workspace
 
-Gyana AI Workspace is an all-in-one AI product that combines:
+Vedrix Workspace is an all-in-one AI product that combines:
 
 - conversational AI
 - document-grounded RAG
@@ -186,4 +186,4 @@ Open the live frontend link on Vercel and validate:
 
 ## Maintainer
 
-Built and evolving under Ayushman Pati's Gyana AI vision.
+Built and evolving under Ayushman Pati's Vedrix vision.

@@ -1,5 +1,5 @@
 """
-Gyana AI - Agentic Service v4
+Vedrix - Agentic Service v4
 """
 import os, re, json, base64, asyncio, subprocess, sys, tempfile, urllib.parse, pathlib
 from collections import defaultdict, deque
@@ -34,7 +34,7 @@ def clear_history(uid):
     _memory[uid].clear()
     _doc_focus[uid].clear()
 
-SYSTEM = """You are Gyana AI — a brilliant, warm, all-in-one AI assistant built by Ayushman Pati from Cuttack, Odisha, India.
+SYSTEM = """You are Vedrix — a brilliant, warm, all-in-one AI assistant built by Ayushman Pati from Cuttack, Odisha, India.
 
 PERSONALITY:
 - Warm, direct, genuinely helpful — like a brilliant friend who knows everything
@@ -75,7 +75,7 @@ RULES:
 3. Never start response with { or JSON
 4. For document questions — answer from the document
 5. Built by Ayushman Pati, Cuttack, Odisha, India
-6. You are Gyana — not just an AI
+6. You are Vedrix — not just an AI
 Output tool calls as single JSON line only."""
 
 TASK_PROFILES = {
@@ -863,8 +863,8 @@ def is_rate_limit_error(exc):
 
 def friendly_model_error(exc):
     if is_rate_limit_error(exc):
-        return "Gyana is temporarily overloaded right now. Switching to backup intelligence if available."
-    return "Gyana hit a temporary backend issue. Please try again."
+        return "Vedrix is temporarily overloaded right now. Switching to backup intelligence if available."
+    return "Vedrix hit a temporary backend issue. Please try again."
 
 def groq_create_with_fallback(**kwargs):
     attempted = []

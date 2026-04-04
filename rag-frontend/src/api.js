@@ -16,7 +16,7 @@ export async function fetchCapabilities() {
     return data;
   } catch {
     return {
-      product_name: "Gyana AI Workspace",
+      product_name: "Vedrix Workspace",
       version: "offline",
       chat_modes: ["auto", "general", "docs"],
       features: ["streaming_chat", "document_rag", "voice_transcription"],

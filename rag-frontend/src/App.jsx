@@ -39,7 +39,7 @@ const DEVICE_LOCK_TIMEOUT_MS = 90 * 1000;
 const DEVICE_HEARTBEAT_MS = 30 * 1000;
 const REMOTE_BOOT_TIMEOUT_MS = 8000;
 const GURU_PROMPT_PREFIX =
-  "Respond as Gyana in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
+  "Respond as Vedrix in a warm spoken style. Be like a wise tutor, thoughtful therapist, and clear guide. Keep it natural, calm, comforting, and deeply helpful. Answer in the same language the user speaks unless they ask otherwise. No markdown unless code is essential.";
 
 const MODE_META = {
   auto: "Auto",
@@ -381,9 +381,12 @@ function normalizeVoiceTranscript(text) {
   return String(text || "")
     .replace(/\bhey\s+guru\b/gi, "hey guru")
     .replace(/\bhi\s+guru\b/gi, "hey guru")
-    .replace(/\bgyana\b/gi, "Gyana")
-    .replace(/\bgiana\b/gi, "Gyana")
-    .replace(/\bjana\b/gi, "Gyana")
+    .replace(/\bgyana\b/gi, "Vedrix")
+    .replace(/\bgiana\b/gi, "Vedrix")
+    .replace(/\bjana\b/gi, "Vedrix")
+    .replace(/\bvedriks\b/gi, "Vedrix")
+    .replace(/\bvedrics\b/gi, "Vedrix")
+    .replace(/\bbedrix\b/gi, "Vedrix")
     .replace(/\bguia\b/gi, "guru")
     .replace(/\bguro\b/gi, "guru")
     .replace(/\s+/g, " ")
@@ -680,7 +683,7 @@ function LoginScreen() {
   return (
     <main className="auth-shell">
       <div className="auth-panel">
-        <div className="auth-mark">Gyana</div>
+        <div className="auth-mark">Vedrix</div>
         <h1>Meet your Guru.</h1>
         <p>
           A calm AI companion for study, clarity, conversation, and guidance.
@@ -697,13 +700,13 @@ function DeviceLockScreen({ lockOwner, onRefresh, onSignOut }) {
   return (
     <main className="loading-shell">
       <div className="loading-panel">
-        <div className="auth-mark">Gyana</div>
-        <h1>Gyana is active on another device.</h1>
+        <div className="auth-mark">Vedrix</div>
+        <h1>Vedrix is active on another device.</h1>
         <p>
-          This account can use Gyana on one device at a time.
+          This account can use Vedrix on one device at a time.
           {lockOwner?.label ? ` Current device: ${lockOwner.label}.` : ""}
         </p>
-        <p className="device-lock-note">Gyana will keep checking and reconnect here when the other device stops.</p>
+        <p className="device-lock-note">Vedrix will keep checking and reconnect here when the other device stops.</p>
         <div className="auth-actions">
           <button className="primary-btn" onClick={onRefresh}>
             Check again
@@ -751,7 +754,7 @@ function GuruMode({ isOpen, onClose, onSubmitVoice, busy, language }) {
         <div className="guru-label">Guru Mode</div>
         <h2>Hey Guru</h2>
         <p>
-          Speak naturally. Gyana listens like a tutor, thinks like a guide, and
+          Speak naturally. Vedrix listens like a tutor, thinks like a guide, and
           answers like someone who is with you.
         </p>
         <div className="guru-status">
@@ -1852,7 +1855,7 @@ function AppInner() {
           focus: focusPreset,
           responseStyle,
         });
-        const finalText = data.answer || "Gyana could not generate a final build response.";
+        const finalText = data.answer || "Vedrix could not generate a final build response.";
         patchMessage(assistant.id, {
           text: finalText,
           sources: data.sources || [],
@@ -1969,7 +1972,7 @@ function AppInner() {
           endpoint: "guru",
           languageHint: preferredLanguage,
           promptHint:
-            "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
+            "This is a voice message for Vedrix in guru mode. Key words may include Hey Guru and Vedrix.",
           maxDurationMs: 8000,
         });
       } catch {
@@ -2018,7 +2021,7 @@ function AppInner() {
           endpoint: "standard",
           languageHint: preferredLanguage,
           promptHint:
-            "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
+            "This is a user voice query for Vedrix. It may contain coding, study, document, or guidance requests.",
           maxDurationMs: 10000,
         });
       } catch {
@@ -2055,7 +2058,7 @@ function AppInner() {
   if (firebaseAuth && user === undefined && !authBootstrappedRef.current) {
     return (
       <main className="loading-shell">
-        <div className="loading-panel">Awakening Gyana...</div>
+        <div className="loading-panel">Awakening Vedrix...</div>
       </main>
     );
   }
@@ -2132,7 +2135,7 @@ function AppInner() {
           <button className="brand-button" onClick={handleNewConversation}>
             <span className="brand-mark" />
             <div>
-              <strong>Gyana</strong>
+              <strong>Vedrix</strong>
               <span>your guru</span>
             </div>
           </button>
@@ -2310,7 +2313,7 @@ function AppInner() {
                       className={`message-turn ${message.role === "user" ? "user" : "assistant"}`}
                     >
                       <div className="message-label">
-                        <span>{message.role === "user" ? "You" : "Gyana"}</span>
+                        <span>{message.role === "user" ? "You" : "Vedrix"}</span>
                         <span>
                           {message.role === "assistant" && message.language
                             ? `${getLanguageLabel(message.language)} • ${formatTime(message.createdAt)}`
@@ -2413,7 +2416,7 @@ function AppInner() {
                 ref={composerRef}
                 value={draft}
                 rows={1}
-                placeholder="Talk to Gyana..."
+                placeholder="Talk to Vedrix..."
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -2471,7 +2474,7 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    console.error("Gyana UI error:", error, info);
+    console.error("Vedrix UI error:", error, info);
   }
 
   render() {
@@ -2479,7 +2482,7 @@ class ErrorBoundary extends React.Component {
       return (
         <main className="loading-shell">
           <div className="loading-panel">
-            <div className="auth-mark">Gyana</div>
+            <div className="auth-mark">Vedrix</div>
             <h1>Something went wrong.</h1>
             <p>{this.state.error.message}</p>
           </div>

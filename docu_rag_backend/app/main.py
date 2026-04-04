@@ -1,5 +1,5 @@
 """
-Gyana AI backend application.
+Vedrix backend application.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from app.services.speech_service import speech_provider_status, transcribe_audio
 from app.services.vector_store import get_stats
 
 app = FastAPI(
-    title="Gyana AI Workspace API",
+    title="Vedrix Workspace API",
     version="3.0.0",
     description="All-in-one chat, voice, document intelligence, and agentic tooling backend.",
 )
@@ -83,7 +83,7 @@ def _stream_response(generator):
 @app.get("/")
 async def root():
     return {
-        "status": "Gyana AI running",
+        "status": "Vedrix running",
         "version": "3.0.0",
         "product": "all-in-one-ai-workspace",
     }
@@ -97,7 +97,7 @@ async def health():
 @app.get("/capabilities")
 async def capabilities():
     return {
-        "product_name": "Gyana AI Workspace",
+        "product_name": "Vedrix Workspace",
         "version": "3.0.0",
         "chat_modes": ["auto", "general", "docs"],
         "features": [
