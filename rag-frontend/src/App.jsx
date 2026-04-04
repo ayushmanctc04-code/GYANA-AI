@@ -786,7 +786,10 @@ function AppInner() {
   );
 
   const storageUserId = user?.uid || "guest-workspace";
-  const sessionDocRef = firestoreDb && user?.uid ? doc(firestoreDb, "gyana_sessions", user.uid) : null;
+  const sessionDocRef = useMemo(
+    () => (firestoreDb && user?.uid ? doc(firestoreDb, "gyana_sessions", user.uid) : null),
+    [user?.uid]
+  );
   const deviceLabel = getDeviceLabel();
 
   useEffect(() => {
