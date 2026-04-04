@@ -12,6 +12,7 @@ import {
   doc,
   getDoc,
   getFirestore,
+  onSnapshot,
   setDoc,
   updateDoc,
 } from "firebase/firestore";
@@ -339,8 +340,36 @@ function stripMarkdownForSpeech(text) {
     .trim();
 }
 
+function isCodeHeavyText(text) {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  if (/```/.test(value)) return true;
+  const codeSignals = (value.match(/[{}<>;=]/g) || []).length;
+  const htmlSignals = (value.match(/<\/?[a-z][^>]*>/gi) || []).length;
+  return codeSignals > 30 || htmlSignals > 6;
+}
+
+function buildVoiceFriendlyText(text) {
+  const cleaned = stripMarkdownForSpeech(text)
+    .replace(/\bSources?\s*:/gi, " ")
+    .replace(/\((?:p|pp)\.\s*\d+(?:\s*-\s*\d+)?\)/gi, " ")
+    .replace(/\(slide\s*\d+\)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (isCodeHeavyText(text)) {
+    return "I have prepared the code for this. Open the preview or code panel to review the full implementation.";
+  }
+
+  if (cleaned.length > 1100) {
+    return `${cleaned.slice(0, 1050).trim()}.`;
+  }
+
+  return cleaned;
+}
+
 function chunkSpeechText(text, maxLength = 220) {
-  const clean = stripMarkdownForSpeech(text);
+  const clean = buildVoiceFriendlyText(text);
   if (!clean) return [];
 
   const sentences = clean
@@ -652,6 +681,7 @@ function DeviceLockScreen({ lockOwner, onRefresh, onSignOut }) {
           This account can use Gyana on one device at a time.
           {lockOwner?.label ? ` Current device: ${lockOwner.label}.` : ""}
         </p>
+        <p className="device-lock-note">Gyana will keep checking and reconnect here when the other device stops.</p>
         <div className="auth-actions">
           <button className="primary-btn" onClick={onRefresh}>
             Check again
@@ -756,6 +786,7 @@ function AppInner() {
   const [speakingId, setSpeakingId] = useState(null);
   const [selectedArtifactIndex, setSelectedArtifactIndex] = useState(0);
   const [remoteReady, setRemoteReady] = useState(!firestoreDb);
+  const [syncStatus, setSyncStatus] = useState(firestoreDb ? "Connecting" : "Local only");
   const [deviceLock, setDeviceLock] = useState({
     checked: !firestoreDb,
     allowed: !firestoreDb,
@@ -779,6 +810,7 @@ function AppInner() {
   const loadedRemoteSessionsRef = useRef(false);
   const deviceIdRef = useRef(getOrCreateDeviceId());
   const sessionsSaveTimerRef = useRef(null);
+  const autoRetryTimerRef = useRef(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0],
@@ -825,6 +857,7 @@ function AppInner() {
     if (!sessionDocRef || !user?.uid) {
       setDeviceLock({ checked: true, allowed: true, owner: null });
       setRemoteReady(true);
+      setSyncStatus("Local only");
       return true;
     }
 
@@ -849,6 +882,7 @@ function AppInner() {
           },
         });
         setRemoteReady(false);
+        setSyncStatus("Another device active");
         return false;
       }
 
@@ -869,10 +903,12 @@ function AppInner() {
 
       setDeviceLock({ checked: true, allowed: true, owner: null });
       setRemoteReady(false);
+      setSyncStatus("Syncing");
       return true;
     } catch {
       setDeviceLock({ checked: true, allowed: true, owner: null });
       setRemoteReady(true);
+      setSyncStatus("Local fallback");
       return true;
     }
   }
@@ -885,6 +921,7 @@ function AppInner() {
     if (!sessionDocRef || !user?.uid) {
       setRemoteReady(true);
       setDeviceLock({ checked: true, allowed: true, owner: null });
+      setSyncStatus(firebaseAuth ? "Local only" : "Guest mode");
       return undefined;
     }
 
@@ -910,11 +947,13 @@ function AppInner() {
               : remoteSessions[0]?.id || ""
           );
           setRemoteReady(true);
+          setSyncStatus("Live sync");
         }
       } catch {
         if (!cancelled) {
           loadedRemoteSessionsRef.current = false;
           setRemoteReady(true);
+          setSyncStatus("Local fallback");
         }
       }
     };
@@ -937,6 +976,7 @@ function AppInner() {
 
     sessionsSaveTimerRef.current = window.setTimeout(async () => {
       try {
+        setSyncStatus("Syncing");
         await setDoc(
           sessionDocRef,
           {
@@ -950,8 +990,10 @@ function AppInner() {
           },
           { merge: true }
         );
+        setSyncStatus("Live sync");
       } catch {
         // ignore remote persistence errors and keep local state usable
+        setSyncStatus("Local fallback");
       }
     }, 350);
 
@@ -1001,6 +1043,65 @@ function AppInner() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [deviceLabel, deviceLock.allowed, sessionDocRef, user?.uid]);
+
+  useEffect(() => {
+    if (!sessionDocRef || !user?.uid) return undefined;
+
+    const unsubscribe = onSnapshot(
+      sessionDocRef,
+      (snap) => {
+        const payload = snap.exists() ? snap.data() : {};
+        const currentLock = payload?.deviceLock || null;
+        const now = Date.now();
+        const activeElsewhere =
+          currentLock &&
+          currentLock.deviceId &&
+          currentLock.deviceId !== deviceIdRef.current &&
+          now - Number(currentLock.lastSeen || 0) < DEVICE_LOCK_TIMEOUT_MS;
+
+        if (activeElsewhere) {
+          stopSpeaking();
+          setDeviceLock({
+            checked: true,
+            allowed: false,
+            owner: {
+              label: currentLock.label || "Another device",
+              lastSeen: currentLock.lastSeen || 0,
+            },
+          });
+          setSyncStatus("Another device active");
+          return;
+        }
+
+        if (currentLock?.deviceId === deviceIdRef.current) {
+          setDeviceLock((current) => (current.allowed ? current : { checked: true, allowed: true, owner: null }));
+          if (loadedRemoteSessionsRef.current) {
+            setSyncStatus("Live sync");
+          }
+        }
+      },
+      () => {
+        setSyncStatus("Local fallback");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [sessionDocRef, user?.uid]);
+
+  useEffect(() => {
+    if (!sessionDocRef || !user?.uid || deviceLock.allowed) return undefined;
+
+    autoRetryTimerRef.current = window.setInterval(() => {
+      acquireDeviceLock();
+    }, 7000);
+
+    return () => {
+      if (autoRetryTimerRef.current) {
+        window.clearInterval(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+      }
+    };
+  }, [deviceLock.allowed, sessionDocRef, user?.uid]);
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, preferredLanguage);
@@ -1919,6 +2020,7 @@ function AppInner() {
             <div className="account-copy">
               <strong>{user?.displayName || "Guest"}</strong>
               <span>{user?.email || "local workspace mode"}</span>
+              <small className="account-status">{syncStatus}</small>
             </div>
           </div>
 

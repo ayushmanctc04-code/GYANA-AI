@@ -688,8 +688,20 @@ def extract_doc_sources(context_docs):
         if key in seen:
             continue
         seen.add(key)
-        label = title if not ref else f"{title} • {ref}"
-        sources.append({"title": label, "url": "", "source": title, "ref": ref})
+        normalized_ref = ref
+        page_match = re.search(r"\bpage\s+(\d+)\b", ref, flags=re.IGNORECASE)
+        slide_match = re.search(r"\bslide\s+(\d+)\b", ref, flags=re.IGNORECASE)
+        if page_match:
+            normalized_ref = f"Page {page_match.group(1)}"
+        elif slide_match:
+            normalized_ref = f"Slide {slide_match.group(1)}"
+        label = title if not normalized_ref else f"{title} - {normalized_ref}"
+        entry = {"title": label, "url": "", "source": title, "ref": normalized_ref}
+        if page_match:
+            entry["page"] = int(page_match.group(1))
+        if slide_match:
+            entry["slide"] = int(slide_match.group(1))
+        sources.append(entry)
     return sources
 
 def update_doc_focus(user_id, sources):
@@ -758,6 +770,8 @@ def build_document_grounding_instruction(question, context_docs=""):
         "DOCUMENT GROUNDING:",
         "- Base the answer on the uploaded material first.",
         f"- Use available source references naturally, for example ({refs_line}) when helpful.",
+        "- When page or slide references are available, mention the exact page or slide in the answer.",
+        "- End with a short References line naming the exact file and page or slide used when available.",
         "- If the file does not fully support a claim, say that plainly instead of inventing details.",
     ]
     if mode == "solve":

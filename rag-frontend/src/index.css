@@ -1190,6 +1190,19 @@ textarea {
   background: rgba(24, 184, 175, 0.12);
 }
 
+.account-status {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.device-lock-note {
+  margin-top: -8px;
+  margin-bottom: 4px;
+  font-size: 0.88rem;
+}
+
 .composer-wrap {
   display: flex;
   justify-content: center;
