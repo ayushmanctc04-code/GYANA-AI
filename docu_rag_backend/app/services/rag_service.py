@@ -746,6 +746,50 @@ def lexical_overlap_score(question, text):
         return 0.0
     return len(q_tokens & t_tokens) / max(len(q_tokens), 1)
 
+def is_casual_chat(question):
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+    casual_phrases = [
+        "how are you",
+        "who are you",
+        "what are you doing",
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good evening",
+        "good night",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+    ]
+    return q in casual_phrases or any(q.startswith(f"{phrase} ") for phrase in casual_phrases)
+
+def select_relevant_history(question, history, limit):
+    if not history:
+        return []
+    recent = history[-limit:]
+    if is_casual_chat(question):
+        return []
+
+    question_profile = detect_task_profile(question)
+    recent_user_messages = [item for item in recent if item.get("role") == "user"]
+    last_user_message = recent_user_messages[-1]["content"] if recent_user_messages else ""
+    overlap = lexical_overlap_score(question, last_user_message)
+
+    if question_profile == "coder" and is_direct_build_request(question):
+        return recent[-2:] if overlap >= 0.12 else []
+
+    if question_targets_documents(question) or is_followup_document_question(question):
+        return recent
+
+    if overlap < 0.08:
+        return recent[-2:] if question_profile in ("mentor", "teacher") else []
+
+    return recent
+
 def extract_section_ref(text):
     match = re.search(r"^\[(Page\s+\d+|Slide\s+\d+|Notes)\]", text or "", flags=re.IGNORECASE | re.MULTILINE)
     return match.group(1) if match else ""
@@ -940,7 +984,7 @@ async def stream_agentic(
     focus="adaptive",
     response_style="balanced",
 ):
-    history = get_history(user_id)
+    history = select_relevant_history(question, get_history(user_id), STREAM_HISTORY_LIMIT)
     system, task_profile = build_dynamic_system(question, context_docs)
     language_instruction, response_language = build_language_instruction(
         question, preferred_language, context_docs
@@ -1014,7 +1058,7 @@ async def stream_agentic(
             )
 
     messages = [{"role":"system","content":final_system}]
-    messages.extend(history[-STREAM_HISTORY_LIMIT:])
+    messages.extend(history)
     messages.append({"role":"user","content":question})
 
     full = ""; tool_buf = ""; in_tool = False
@@ -1127,7 +1171,7 @@ async def ask_agentic(
     focus="adaptive",
     response_style="balanced",
 ):
-    history = get_history(user_id)
+    history = select_relevant_history(question, get_history(user_id), ASK_HISTORY_LIMIT)
     system, task_profile = build_dynamic_system(question, context_docs)
     language_instruction, response_language = build_language_instruction(
         question, preferred_language, context_docs
@@ -1154,7 +1198,7 @@ async def ask_agentic(
             )
 
     messages = [{"role":"system","content":final_system}]
-    messages.extend(history[-ASK_HISTORY_LIMIT:])
+    messages.extend(history)
     messages.append({"role":"user","content":question})
     try:
         r = groq_create_with_fallback(messages=messages,temperature=0.7,max_tokens=ASK_MAX_TOKENS)

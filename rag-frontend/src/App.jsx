@@ -320,6 +320,15 @@ function createRecognition(language) {
   return recognition;
 }
 
+function canUseMediaRecorderInput() {
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder !== "undefined"
+  );
+}
+
 function stripMarkdownForSpeech(text) {
   return String(text || "")
     .replace(/```[\s\S]*?```/g, " ")
@@ -1152,10 +1161,10 @@ function AppInner() {
   }, [user?.uid]);
 
   useEffect(() => {
-    const hasInput =
-      !!navigator.mediaDevices?.getUserMedia &&
-      typeof window.MediaRecorder !== "undefined";
-    const hasWake = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const hasRecorderInput = canUseMediaRecorderInput();
+    const hasRecognition = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const hasInput = hasRecorderInput || hasRecognition;
+    const hasWake = hasRecognition;
     const hasOutput =
       typeof window.speechSynthesis !== "undefined" &&
       typeof window.SpeechSynthesisUtterance !== "undefined";
@@ -1470,6 +1479,20 @@ function AppInner() {
     promptHint = "",
     maxDurationMs = 9000,
   }) {
+    if (!canUseMediaRecorderInput()) {
+      const transcript = await listenWithBrowserRecognition(languageHint, Math.min(maxDurationMs, 7000));
+      if (!transcript.trim()) {
+        throw new Error("Voice recognition did not catch anything.");
+      }
+      return endpoint === "guru"
+        ? { text: transcript, transcription: transcript, provider: "browser-recognition" }
+        : {
+            transcribed_question: transcript,
+            text: transcript,
+            provider: "browser-recognition",
+          };
+    }
+
     const stream = await getOptimizedMicrophoneStream();
     const mimeType = getPreferredAudioMimeType();
     const recorder = mimeType
@@ -1859,13 +1882,19 @@ function AppInner() {
 
     try {
       stopSpeaking();
-      const transcription = await recordAndTranscribe({
-        endpoint: "guru",
-        languageHint: preferredLanguage,
-        promptHint:
-          "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
-        maxDurationMs: 8000,
-      });
+      let transcription;
+      try {
+        transcription = await recordAndTranscribe({
+          endpoint: "guru",
+          languageHint: preferredLanguage,
+          promptHint:
+            "This is a voice message for Gyana AI in guru mode. Key words may include Hey Guru and Gyana.",
+          maxDurationMs: 8000,
+        });
+      } catch {
+        const transcript = await listenWithBrowserRecognition(preferredLanguage, 6500);
+        transcription = { text: transcript, transcription: transcript, provider: "browser-recognition" };
+      }
       const spokenText = transcription.text || transcription.transcription || "";
 
       if (!spokenText.trim()) {
@@ -1900,13 +1929,23 @@ function AppInner() {
 
     try {
       stopSpeaking();
-      const data = await recordAndTranscribe({
-        endpoint: "standard",
-        languageHint: preferredLanguage,
-        promptHint:
-          "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
-        maxDurationMs: 10000,
-      });
+      let data;
+      try {
+        data = await recordAndTranscribe({
+          endpoint: "standard",
+          languageHint: preferredLanguage,
+          promptHint:
+            "This is a user voice query for Gyana AI. It may contain coding, study, document, or guidance requests.",
+          maxDurationMs: 10000,
+        });
+      } catch {
+        const transcript = await listenWithBrowserRecognition(preferredLanguage, 7000);
+        data = {
+          transcribed_question: transcript,
+          text: transcript,
+          provider: "browser-recognition",
+        };
+      }
       const question = data.transcribed_question || "";
 
       if (!question.trim()) {
