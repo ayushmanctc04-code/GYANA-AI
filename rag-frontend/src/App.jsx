@@ -377,6 +377,19 @@ function buildVoiceFriendlyText(text) {
   return cleaned;
 }
 
+function normalizeVoiceTranscript(text) {
+  return String(text || "")
+    .replace(/\bhey\s+guru\b/gi, "hey guru")
+    .replace(/\bhi\s+guru\b/gi, "hey guru")
+    .replace(/\bgyana\b/gi, "Gyana")
+    .replace(/\bgiana\b/gi, "Gyana")
+    .replace(/\bjana\b/gi, "Gyana")
+    .replace(/\bguia\b/gi, "guru")
+    .replace(/\bguro\b/gi, "guru")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function chunkSpeechText(text, maxLength = 220) {
   const clean = buildVoiceFriendlyText(text);
   if (!clean) return [];
@@ -1662,6 +1675,74 @@ function AppInner() {
     }
   }
 
+  async function handleVoiceCommand(rawTranscript) {
+    const transcript = normalizeVoiceTranscript(rawTranscript);
+    const lower = transcript.toLowerCase();
+
+    if (!transcript) return false;
+
+    if (/^(stop|stop speaking|be quiet|silence)$/.test(lower)) {
+      stopSpeaking();
+      notify("Voice stopped.", "info");
+      return true;
+    }
+
+    if (/^(new chat|new conversation|start new chat|start new conversation)$/.test(lower)) {
+      handleNewConversation();
+      notify("Started a new conversation.", "success");
+      return true;
+    }
+
+    if (/^(open guru|guru mode|hey guru)$/.test(lower)) {
+      setGuruOpen(true);
+      notify("Guru mode opened.", "info");
+      return true;
+    }
+
+    if (/^(switch to docs|documents mode|docs mode)$/.test(lower)) {
+      setMode("docs");
+      notify("Switched to docs mode.", "success");
+      return true;
+    }
+
+    if (/^(switch to general|general mode)$/.test(lower)) {
+      setMode("general");
+      notify("Switched to general mode.", "success");
+      return true;
+    }
+
+    if (/^(switch to auto|auto mode)$/.test(lower)) {
+      setMode("auto");
+      notify("Switched to auto mode.", "success");
+      return true;
+    }
+
+    if (/^(read this|read answer|read the answer|listen to this)$/.test(lower)) {
+      if (latestAssistantMessage?.text) {
+        speakText(
+          latestAssistantMessage.text,
+          latestAssistantMessage.id,
+          latestAssistantMessage.language || preferredLanguage
+        );
+        return true;
+      }
+      notify("There is no answer to read yet.", "info");
+      return true;
+    }
+
+    if (/^(clear chat|delete chat)$/.test(lower)) {
+      handleDeleteConversation(activeSessionId);
+      return true;
+    }
+
+    if (/^(clear memory)$/.test(lower)) {
+      await handleClearMemory();
+      return true;
+    }
+
+    return false;
+  }
+
   function handleNewConversation() {
     const next = createSession();
     next.mode = mode;
@@ -1895,7 +1976,9 @@ function AppInner() {
         const transcript = await listenWithBrowserRecognition(preferredLanguage, 6500);
         transcription = { text: transcript, transcription: transcript, provider: "browser-recognition" };
       }
-      const spokenText = transcription.text || transcription.transcription || "";
+      const spokenText = normalizeVoiceTranscript(
+        (transcription.text || transcription.transcription || "").replace(/^(hey|hi)\s+guru[\s,]*/i, "")
+      );
 
       if (!spokenText.trim()) {
         notify("I could not catch that voice input.", "error");
@@ -1946,10 +2029,14 @@ function AppInner() {
           provider: "browser-recognition",
         };
       }
-      const question = data.transcribed_question || "";
+      const question = normalizeVoiceTranscript(data.transcribed_question || data.text || "");
 
       if (!question.trim()) {
         notify("I could not catch that voice input.", "error");
+        return;
+      }
+
+      if (await handleVoiceCommand(question)) {
         return;
       }
 
