@@ -3,8 +3,10 @@ import { initializeApp } from "firebase/app";
 import {
   GoogleAuthProvider,
   getAuth,
+  getRedirectResult,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
 } from "firebase/auth";
 import {
@@ -166,6 +168,12 @@ function getDeviceLabel() {
   const platform = navigator.platform || "Unknown platform";
   const mobile = /android|iphone|ipad|mobile/i.test(navigator.userAgent || "");
   return mobile ? `Phone • ${platform}` : `Laptop/Desktop • ${platform}`;
+}
+
+function prefersRedirectLogin() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return /iphone|ipad|android|mobile|safari/i.test(ua) && !/chrome|edg|opr/i.test(ua);
 }
 
 async function withTimeout(task, timeoutMs = REMOTE_BOOT_TIMEOUT_MS) {
@@ -669,12 +677,41 @@ function CodeBlock({ language, code }) {
 
 function LoginScreen() {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   async function handleSignIn() {
     if (!firebaseAuth) return;
     setBusy(true);
+    setError("");
     try {
-      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+
+      if (prefersRedirectLogin()) {
+        await signInWithRedirect(firebaseAuth, provider);
+        return;
+      }
+
+      await signInWithPopup(firebaseAuth, provider);
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (
+        error?.code === "auth/popup-blocked" ||
+        error?.code === "auth/cancelled-popup-request" ||
+        error?.code === "auth/operation-not-supported-in-this-environment" ||
+        /popup|redirect/i.test(message)
+      ) {
+        try {
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: "select_account" });
+          await signInWithRedirect(firebaseAuth, provider);
+          return;
+        } catch (redirectError) {
+          setError(redirectError?.message || "Google sign-in could not start.");
+        }
+      } else {
+        setError(error?.message || "Google sign-in failed.");
+      }
     } finally {
       setBusy(false);
     }
@@ -688,6 +725,7 @@ function LoginScreen() {
         <p>
           A calm AI companion for study, clarity, conversation, and guidance.
         </p>
+        {error ? <p className="auth-error">{error}</p> : null}
         <button className="primary-btn" onClick={handleSignIn} disabled={busy}>
           {busy ? "Opening Google..." : "Continue with Google"}
         </button>
@@ -1164,6 +1202,9 @@ function AppInner() {
 
   useEffect(() => {
     if (!firebaseAuth) return undefined;
+    getRedirectResult(firebaseAuth).catch(() => {
+      // handled by normal auth state flow or login retry messaging
+    });
     const unsubscribe = onAuthStateChanged(firebaseAuth, (nextUser) => {
       authBootstrappedRef.current = true;
       setUser(nextUser ?? null);
